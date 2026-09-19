@@ -53,9 +53,15 @@ select. Inside a session:
 /quit
 ```
 
-Press Tab at command and path positions to open context-aware suggestions. Source positions prioritize supported language files, inputs prioritize saved cases and `.in`/`.txt` files, and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths containing spaces are quoted automatically. Completion lists are scrollable, resize-aware, and capped to the available terminal height.
+Typing `/` opens a dimmed command menu immediately; continue typing to filter
+it or press Tab to insert the highlighted full command. Press Tab at path
+positions to open context-aware file suggestions. Source positions prioritize
+supported language files, inputs prioritize saved cases and `.in`/`.txt` files,
+and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths
+containing spaces are quoted automatically. Completion lists are scrollable,
+resize-aware, and capped to the available terminal height.
 
-Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse reporting is enabled only while an interactive control owns it, disabled while a submitted program owns the terminal, and cleaned up on every normal, error, panic, or handled-signal exit.
+Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with `Run`, `Build`, and `Test` buttons (`Test` runs all saved cases). Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit.
 
 ## One-shot commands
 

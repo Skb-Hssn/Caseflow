@@ -186,11 +186,59 @@ fn mouse_click_selects_a_file_completion() {
     session.wait_for("run-cli:main.py");
     session.send(b"/run --input input-\t");
     session.wait_for("[ Select ]");
-    // The prompt occupies row 1 and the first completion is rendered on row 2.
-    session.send(b"\x1b[<0;2;2M");
+    // The prompt and suggestion header occupy rows 1-2; the first item is row 3.
+    session.send(b"\x1b[<0;2;3M");
     session.send(b"\r");
     session.wait_for("\r\n5\r\n");
     session.wait_for("Success (exit 0)");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn slash_opens_dimmed_commands_and_tab_accepts_one() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+    session.send(b"/");
+    session.wait_for("Commands");
+    session.send(b"\t");
+    session.wait_for("\x1b[0m/run \x1b");
+    session.send(b"\x03");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn persistent_mouse_toolbar_runs_the_active_source() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('toolbar-run')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[ Run ]");
+    // The toolbar is fixed to row 24; Run starts after the "Actions" label.
+    session.send(b"\x1b[<0;13;24M");
+    session.wait_for("toolbar-run");
+    session.wait_for("Success (exit 0)");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn mouse_toolbar_is_not_redrawn_while_typing() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[ Run ]");
+    assert_eq!(session.text().matches("[ Run ]").count(), 1);
+    session.send(b"/xyz");
+    session.wait_for("/xyz");
+    assert_eq!(
+        session.text().matches("[ Run ]").count(),
+        1,
+        "toolbar should remain static during prompt redraws"
+    );
+    session.send(b"\x03");
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }

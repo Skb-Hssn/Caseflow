@@ -55,14 +55,14 @@ fn open_session(source: Option<std::path::PathBuf>, globals: GlobalOptions) -> A
     let source = match source {
         Some(source) => source,
         None => {
-            let (config, _) = commands::configured(None, globals)?;
+            let (config, ui) = commands::configured(None, globals)?;
             let sources = source::scan_sources(Path::new(".")).map_err(AppError::new)?;
             if sources.is_empty() {
                 return Err(AppError::new(
                     "no supported source files found in the current directory",
                 ));
             }
-            terminal::select_source(&sources, config.mouse)?
+            terminal::select_source(&sources, config.mouse, ui.color_enabled())?
                 .ok_or_else(|| AppError::new("source selection cancelled"))?
         }
     };

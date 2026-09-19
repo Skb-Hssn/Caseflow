@@ -2,7 +2,7 @@ use crate::cases;
 use crate::cli::Cli;
 use crate::commands::{self, GlobalOptions};
 use crate::config::Config;
-use crate::editor::{EditorSignal, LineEditor};
+use crate::editor::{EditorAction, EditorSignal, LineEditor};
 use crate::error::{AppError, AppResult};
 use crate::model::{BuildMode, SourceSpec};
 use crate::source::{resolve_source, scan_sources};
@@ -26,14 +26,23 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
         .ui
         .welcome(&session.source, session.mode, session.mouse);
 
-    let mut editor = LineEditor::new(session.config.state_dir.join("history.txt"), session.mouse);
+    let mut editor = LineEditor::new(
+        session.config.state_dir.join("history.txt"),
+        session.mouse,
+        session.ui.color_enabled(),
+    );
     if let Some(warning) = editor.take_warning() {
         session.ui.warning(warning);
     }
 
+    let mut first_prompt = true;
     loop {
+        if !first_prompt {
+            eprintln!();
+        }
+        first_prompt = false;
         let prompt = format!(
-            "run-cli:{} [{}] › ",
+            "run-cli:{} · {} › ",
             session
                 .source
                 .path
@@ -54,9 +63,24 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                     Err(error) => session.ui.error(error.message),
                 }
                 editor.set_mouse(session.mouse);
+                editor.set_color(session.ui.color_enabled());
                 if let Some(warning) = editor.take_warning() {
                     session.ui.warning(warning);
                 }
+            }
+            EditorSignal::Action(action) => {
+                let command = match action {
+                    EditorAction::Run => "/run",
+                    EditorAction::Build => "/build",
+                    EditorAction::Test => "/test all",
+                };
+                match session.handle(command) {
+                    Ok(SessionAction::Continue) => {}
+                    Ok(SessionAction::Exit) => return Ok(0),
+                    Err(error) => session.ui.error(error.message),
+                }
+                editor.set_mouse(session.mouse);
+                editor.set_color(session.ui.color_enabled());
             }
             EditorSignal::CtrlC => {
                 eprintln!("^C");
@@ -98,12 +122,16 @@ impl Session {
             }
             "/status" => {
                 let case_count = cases::list(&self.source)?.len();
-                println!("Source     {}", self.source.path.display());
-                println!("Language   {}", self.source.language);
-                println!("Mode       {}", self.mode);
-                println!("Cases      {case_count}");
-                println!("Mouse      {}", if self.mouse { "on" } else { "off" });
-                println!("Cache      {}", self.config.cache_dir.display());
+                self.ui.header("SESSION", "");
+                self.ui
+                    .field("Source", self.source.path.display().to_string());
+                self.ui.field("Language", self.source.language.to_string());
+                self.ui.field("Mode", self.mode.to_string());
+                self.ui.field("Cases", case_count.to_string());
+                self.ui
+                    .field("Mouse", if self.mouse { "on" } else { "off" });
+                self.ui
+                    .field("Cache", self.config.cache_dir.display().to_string());
                 Ok(SessionAction::Continue)
             }
             "/mode" => {
@@ -134,6 +162,7 @@ impl Session {
                     terminal::select_source(
                         &scan_sources(Path::new(".")).map_err(AppError::new)?,
                         self.mouse,
+                        self.ui.color_enabled(),
                     )?
                 };
                 if let Some(path) = path {
@@ -274,8 +303,12 @@ impl Session {
                 let id = tokens
                     .get(2)
                     .ok_or_else(|| AppError::usage("usage: /case delete ID"))?;
-                if !terminal::confirm(&format!("Delete saved input #{id}?"), "Delete", self.mouse)?
-                {
+                if !terminal::confirm(
+                    &format!("Delete saved input #{id}?"),
+                    "Delete",
+                    self.mouse,
+                    self.ui.color_enabled(),
+                )? {
                     self.ui.info("Cancelled");
                     return Ok(());
                 }
@@ -283,7 +316,12 @@ impl Session {
                 args.push(OsString::from("--force"));
             }
             "clear" => {
-                if !terminal::confirm("Delete all saved inputs?", "Clear", self.mouse)? {
+                if !terminal::confirm(
+                    "Delete all saved inputs?",
+                    "Clear",
+                    self.mouse,
+                    self.ui.color_enabled(),
+                )? {
                     self.ui.info("Cancelled");
                     return Ok(());
                 }
@@ -319,18 +357,28 @@ impl Session {
 fn print_help() {
     println!(
         "\
-/run [--timeout SEC] [--save-input] [-i FILE] [-o FILE]
-/build [--debug]
-/test all|last|ID[,ID...]
-/case list|show ID|copy ID|paste [ID|next] [--run]|delete ID|clear
-/diff ID EXPECTED
-/stress BRUTE GENERATOR [--limit N] [--timeout SEC]
-/source [PATH]
-/mode standard|debug
-/mouse on|off
-/status
-/doctor
-/help
-/quit"
+RUN
+  /run [--timeout SEC] [--save-input] [-i FILE] [-o FILE]
+  /build [--debug]
+  /test all|last|ID[,ID...]
+
+CASES
+  /case list|show ID|copy ID|paste [ID|next] [--run]
+  /case delete ID|clear
+  /diff ID EXPECTED
+  /stress BRUTE GENERATOR [--limit N] [--timeout SEC]
+
+SESSION
+  /source [PATH]       switch the active source
+  /mode standard|debug
+  /mouse on|off
+  /status              show current settings
+  /doctor              inspect local tools
+  /help                show this help
+  /quit                leave run-cli
+
+KEYS
+  Tab suggestions · ↑↓ navigate · Enter select · Esc close · Ctrl-D exit
+"
     );
 }

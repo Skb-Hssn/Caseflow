@@ -4,7 +4,9 @@ use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
     MouseEventKind,
 };
-use crossterm::style::{Attribute, Print, SetAttribute};
+use crossterm::style::{
+    Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
 use crossterm::{execute, queue};
 use std::io::{self, IsTerminal, Write};
@@ -44,7 +46,7 @@ pub fn restore_terminal() {
     let _ = terminal::disable_raw_mode();
 }
 
-pub fn select_source(sources: &[PathBuf], mouse: bool) -> AppResult<Option<PathBuf>> {
+pub fn select_source(sources: &[PathBuf], mouse: bool, color: bool) -> AppResult<Option<PathBuf>> {
     if sources.is_empty() {
         return Ok(None);
     }
@@ -67,6 +69,7 @@ pub fn select_source(sources: &[PathBuf], mouse: bool) -> AppResult<Option<PathB
             &mut offset,
             button,
             &mut start_row,
+            color,
         )?;
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -136,7 +139,7 @@ pub fn select_source(sources: &[PathBuf], mouse: bool) -> AppResult<Option<PathB
     }
 }
 
-pub fn confirm(prompt: &str, action: &str, mouse: bool) -> AppResult<bool> {
+pub fn confirm(prompt: &str, action: &str, mouse: bool, color: bool) -> AppResult<bool> {
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
         return Ok(false);
     }
@@ -164,28 +167,39 @@ pub fn confirm(prompt: &str, action: &str, mouse: bool) -> AppResult<bool> {
         let cancel_start = action_end + 2;
         let cancel_end = cancel_start + cancel_width as u16;
         let mut stderr = io::stderr();
+        queue!(stderr, MoveTo(0, row), Clear(ClearType::FromCursorDown))?;
+        if color {
+            queue!(stderr, SetForegroundColor(Color::Yellow))?;
+        }
         queue!(
             stderr,
-            MoveTo(0, row),
-            Clear(ClearType::FromCursorDown),
-            Print(&prompt)
+            SetAttribute(Attribute::Bold),
+            Print(&prompt),
+            SetAttribute(Attribute::Reset),
+            ResetColor
         )?;
         if same_line {
             queue!(stderr, Print("  "))?;
         } else {
             queue!(stderr, MoveTo(0, button_row))?;
         }
-        if compact {
-            draw_compact_button(&mut stderr, action_label, selected == 0)?;
-        } else {
-            draw_button(&mut stderr, action_label, selected == 0)?;
-        }
+        draw_tinted_button(
+            &mut stderr,
+            action_label,
+            selected == 0,
+            compact,
+            color,
+            Color::Red,
+        )?;
         queue!(stderr, Print("  "))?;
-        if compact {
-            draw_compact_button(&mut stderr, cancel_label, selected == 1)?;
-        } else {
-            draw_button(&mut stderr, cancel_label, selected == 1)?;
-        }
+        draw_tinted_button(
+            &mut stderr,
+            cancel_label,
+            selected == 1,
+            compact,
+            color,
+            Color::DarkGrey,
+        )?;
         stderr.flush()?;
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
@@ -311,6 +325,7 @@ fn render_picker(
     offset: &mut usize,
     button: usize,
     start_row: &mut u16,
+    color: bool,
 ) -> AppResult<PickerLayout> {
     let (width, height) = terminal::size().unwrap_or((80, 24));
     let width = width.max(1);
@@ -339,19 +354,42 @@ fn render_picker(
     queue!(
         stderr,
         MoveTo(0, *start_row),
-        Clear(ClearType::FromCursorDown),
-        Print(truncate_width(
-            &format!("Source search: {query}"),
-            width as usize
-        )),
-        MoveTo(0, *start_row + 1),
+        Clear(ClearType::FromCursorDown)
+    )?;
+    if color {
+        queue!(stderr, SetForegroundColor(Color::Cyan))?;
+    }
+    queue!(
+        stderr,
+        SetAttribute(Attribute::Bold),
+        Print("Select source"),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        SetAttribute(Attribute::Dim),
+        Print(format!("  ·  {} files", sources.len())),
+        SetAttribute(Attribute::Reset),
+        Clear(ClearType::UntilNewLine),
+        MoveTo(0, *start_row + 1)
+    )?;
+    if color {
+        queue!(stderr, SetForegroundColor(Color::Yellow))?;
+    }
+    queue!(
+        stderr,
+        SetAttribute(Attribute::Bold),
+        Print("Search"),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        Print("  "),
         Print(truncate_width(
             &if matches.is_empty() {
-                "  No matching sources".to_string()
+                format!("{query}  ·  no matches")
+            } else if query.is_empty() {
+                format!("type to filter…  ·  {} shown", matches.len())
             } else {
-                format!("  {} match(es) · type to filter", matches.len())
+                format!("{query}  ·  {} matches", matches.len())
             },
-            width as usize
+            width.saturating_sub(8) as usize
         )),
         Clear(ClearType::UntilNewLine)
     )?;
@@ -360,32 +398,70 @@ fn render_picker(
         let source_match = matches[match_index];
         let source = &sources[source_match.index];
         queue!(stderr, MoveTo(0, candidate_row + visible_index as u16))?;
-        if match_index == selected {
+        let is_selected = match_index == selected;
+        if is_selected && color {
+            queue!(
+                stderr,
+                SetForegroundColor(Color::Black),
+                SetBackgroundColor(Color::Cyan),
+                SetAttribute(Attribute::Bold)
+            )?;
+        } else if is_selected {
             queue!(stderr, SetAttribute(Attribute::Reverse))?;
         }
-        let label = format!("  {:>3}. {}", source_match.index + 1, source.display());
-        queue!(stderr, Print(truncate_width(&label, width as usize)))?;
-        if match_index == selected {
-            queue!(stderr, SetAttribute(Attribute::NoReverse))?;
+        let marker = if is_selected { "›" } else { " " };
+        let label = format!(" {marker} {}", source.display());
+        let label = truncate_width(&label, width.saturating_sub(1) as usize);
+        if is_selected {
+            queue!(
+                stderr,
+                Print(pad_width(&label, width.saturating_sub(1) as usize)),
+                SetAttribute(Attribute::Reset),
+                ResetColor
+            )?;
+        } else {
+            queue!(stderr, Print(label))?;
         }
         queue!(stderr, Clear(ClearType::UntilNewLine))?;
     }
     queue!(stderr, MoveTo(0, button_row))?;
     let (select_end, cancel_start, cancel_end) = if width >= 22 {
-        draw_button(&mut stderr, "Select", button == 0)?;
+        draw_tinted_button(
+            &mut stderr,
+            "Select",
+            button == 0,
+            false,
+            color,
+            Color::Green,
+        )?;
         queue!(stderr, Print("  "))?;
-        draw_button(&mut stderr, "Cancel", button == 1)?;
-        (10, 12, 22)
+        draw_tinted_button(
+            &mut stderr,
+            "Close",
+            button == 1,
+            false,
+            color,
+            Color::DarkGrey,
+        )?;
+        (10, 12, 21)
     } else {
-        draw_compact_button(&mut stderr, "OK", button == 0)?;
+        draw_tinted_button(&mut stderr, "OK", button == 0, true, color, Color::Green)?;
         queue!(stderr, Print(" "))?;
-        draw_compact_button(&mut stderr, "X", button == 1)?;
+        draw_tinted_button(&mut stderr, "X", button == 1, true, color, Color::DarkGrey)?;
         (4, 5, 8)
     };
     if matches.len() > visible && !matches.is_empty() {
         queue!(
             stderr,
             Print(format!("  {}/{}", selected + 1, matches.len()))
+        )?;
+    }
+    if width >= 72 {
+        queue!(
+            stderr,
+            SetAttribute(Attribute::Dim),
+            Print("  type to filter · ↑↓ navigate · Enter select"),
+            SetAttribute(Attribute::Reset)
         )?;
     }
     queue!(stderr, Clear(ClearType::UntilNewLine))?;
@@ -422,6 +498,45 @@ fn draw_compact_button(output: &mut impl Write, label: &str, selected: bool) -> 
     Ok(())
 }
 
+fn draw_tinted_button(
+    output: &mut impl Write,
+    label: &str,
+    selected: bool,
+    compact: bool,
+    color: bool,
+    tint: Color,
+) -> AppResult<()> {
+    if !color {
+        return if compact {
+            draw_compact_button(output, label, selected)
+        } else {
+            draw_button(output, label, selected)
+        };
+    }
+    if selected {
+        queue!(
+            output,
+            SetForegroundColor(Color::Black),
+            SetBackgroundColor(tint),
+            SetAttribute(Attribute::Bold)
+        )?;
+    } else {
+        queue!(output, SetForegroundColor(tint))?;
+    }
+    let button = if compact {
+        format!("[{label}]")
+    } else {
+        format!("[ {label} ]")
+    };
+    queue!(
+        output,
+        Print(button),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    Ok(())
+}
+
 fn clear_picker(start_row: u16) -> AppResult<()> {
     let mut stderr = io::stderr();
     execute!(
@@ -452,6 +567,11 @@ fn truncate_width(value: &str, width: usize) -> String {
     result
 }
 
+fn pad_width(value: &str, width: usize) -> String {
+    let padding = width.saturating_sub(UnicodeWidthStr::width(value));
+    format!("{value}{}", " ".repeat(padding))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,5 +592,10 @@ mod tests {
     #[test]
     fn truncation_handles_narrow_terminals() {
         assert_eq!(truncate_width("abcdefgh", 4), "abc…");
+    }
+
+    #[test]
+    fn selected_rows_can_fill_the_available_width() {
+        assert_eq!(pad_width("λ", 3), "λ  ");
     }
 }

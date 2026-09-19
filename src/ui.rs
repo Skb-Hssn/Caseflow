@@ -24,6 +24,10 @@ impl Ui {
         self.interactive
     }
 
+    pub fn color_enabled(&self) -> bool {
+        self.color
+    }
+
     pub fn header(&self, title: &str, detail: impl AsRef<str>) {
         if !self.interactive {
             return;
@@ -43,7 +47,7 @@ impl Ui {
     }
 
     pub fn info(&self, message: impl AsRef<str>) {
-        eprintln!("  {}", message.as_ref());
+        eprintln!("  • {}", message.as_ref());
     }
 
     pub fn success(&self, message: impl AsRef<str>) {
@@ -56,17 +60,26 @@ impl Ui {
 
     pub fn warning(&self, message: impl AsRef<str>) {
         if self.color {
-            eprintln!("  \x1b[33m{}\x1b[0m", message.as_ref());
+            eprintln!("  \x1b[33m! {}\x1b[0m", message.as_ref());
         } else {
-            eprintln!("  {}", message.as_ref());
+            eprintln!("  ! {}", message.as_ref());
         }
     }
 
     pub fn error(&self, message: impl AsRef<str>) {
         if self.color {
-            eprintln!("\x1b[31;1mError:\x1b[0m {}", message.as_ref());
+            eprintln!("\x1b[31;1m✗ Error\x1b[0m  {}", message.as_ref());
         } else {
-            eprintln!("Error: {}", message.as_ref());
+            eprintln!("✗ Error  {}", message.as_ref());
+        }
+    }
+
+    pub fn field(&self, label: &str, value: impl AsRef<str>) {
+        let label = format!("{label:<10}");
+        if self.color {
+            eprintln!("  \x1b[2m{label}\x1b[0m{}", value.as_ref());
+        } else {
+            eprintln!("  {label}{}", value.as_ref());
         }
     }
 
@@ -84,48 +97,72 @@ impl Ui {
         } else {
             format!("Failed (exit {})", report.exit_code)
         };
-        self.header("RESOURCE USAGE", "");
-        eprintln!("  Status       {status}");
-        eprintln!("  Wall time    {:.3} s", report.wall_time.as_secs_f64());
-        eprintln!(
-            "  CPU time     {:.3} s user · {:.3} s system · {:.0}%",
-            report.user_time.as_secs_f64(),
-            report.system_time.as_secs_f64(),
-            cpu
+        self.header("RESULT", "");
+        self.field("Status", status);
+        self.field("Wall", format!("{:.3} s", report.wall_time.as_secs_f64()));
+        self.field(
+            "CPU",
+            format!(
+                "{:.3} s user · {:.3} s system · {:.0}%",
+                report.user_time.as_secs_f64(),
+                report.system_time.as_secs_f64(),
+                cpu
+            ),
         );
-        eprintln!("  Peak memory  {}", format_memory(report.peak_memory_kib));
+        self.field("Memory", format_memory(report.peak_memory_kib));
     }
 
     pub fn welcome(&self, source: &SourceSpec, mode: BuildMode, mouse: bool) {
         let width = terminal_width().min(64);
         if width < 28 {
-            eprintln!("run-cli {}", env!("CARGO_PKG_VERSION"));
+            eprintln!("run-cli v{}", env!("CARGO_PKG_VERSION"));
             eprintln!(
-                "source: {}",
+                "{}",
                 truncate_width(&source.path.display().to_string(), width)
             );
             eprintln!(
-                "{} · {} · mouse {}",
+                "{} · {} · mouse:{}",
                 source.language,
                 mode,
                 if mouse { "on" } else { "off" }
             );
-            eprintln!("Type /help for commands.\n");
+            eprintln!("/help · Tab complete · Ctrl-D exit\n");
             return;
         }
-        let line = "─".repeat(width - 2);
-        eprintln!("╭{line}╮");
-        print_box_row(&format!("run-cli {}", env!("CARGO_PKG_VERSION")), width);
-        print_box_row(&format!("source: {}", source.path.display()), width);
-        print_box_row(&format!("language: {}", source.language), width);
-        print_box_row(&format!("mode: {mode}"), width);
+        print_welcome_top(width, self.color);
+        print_box_row(&source.path.display().to_string(), width);
         print_box_row(
-            &format!("mouse: {}", if mouse { "on" } else { "off" }),
+            &format!(
+                "{}  ·  {}  ·  mouse:{}",
+                source.language,
+                mode,
+                if mouse { "on" } else { "off" }
+            ),
             width,
         );
+        let line = "─".repeat(width - 2);
         eprintln!("╰{line}╯");
-        eprintln!("  Type /help for commands; press Tab for suggestions.\n");
+        if self.color {
+            eprintln!("  \x1b[2m/help commands  ·  Tab complete  ·  Ctrl-D exit\x1b[0m\n");
+        } else {
+            eprintln!("  /help commands  ·  Tab complete  ·  Ctrl-D exit\n");
+        }
     }
+}
+
+fn print_welcome_top(width: usize, color: bool) {
+    let (start, title, fill, end) = welcome_top_parts(width);
+    if color {
+        eprintln!("{start}\x1b[36;1m{title}\x1b[0m{fill}{end}");
+    } else {
+        eprintln!("{start}{title}{fill}{end}");
+    }
+}
+
+fn welcome_top_parts(width: usize) -> (&'static str, String, String, &'static str) {
+    let title = format!(" run-cli v{} ", env!("CARGO_PKG_VERSION"));
+    let fill = "─".repeat(width.saturating_sub(UnicodeWidthStr::width(title.as_str()) + 3));
+    ("╭─", title, fill, "╮")
 }
 
 fn terminal_width() -> usize {
@@ -181,5 +218,12 @@ mod tests {
     fn formats_memory_units() {
         assert_eq!(format_memory(512), "512 KiB");
         assert_eq!(format_memory(1536), "1.5 MiB (1536 KiB)");
+    }
+
+    #[test]
+    fn welcome_border_matches_requested_width() {
+        let (start, title, fill, end) = welcome_top_parts(48);
+        let line = format!("{start}{title}{fill}{end}");
+        assert_eq!(UnicodeWidthStr::width(line.as_str()), 48);
     }
 }

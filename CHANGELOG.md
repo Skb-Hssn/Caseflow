@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Refined the welcome panel, prompt, grouped help, session status, result
+  summaries, source picker, confirmation dialogs, and completion menus into a
+  consistent responsive terminal UI.
+- Added clearer selection markers, full-row highlighting, result counts, and
+  contextual keyboard hints for interactive menus.
+- Added a colored REPL prompt and a persistent `Run`/`Build`/`Test` mouse action
+  bar, fixed to the bottom terminal row while the editor is active.
+- Typing `/` now opens a passive dimmed command menu, and Tab accepts the
+  highlighted complete command.
+- Kept the mouse action bar outside the prompt redraw region so typing no
+  longer causes the fixed buttons to flicker; it now repaints only when the
+  terminal is resized or scrolled.
+
 ## [0.2.0] - 2026-09-19
 
 ### Added
