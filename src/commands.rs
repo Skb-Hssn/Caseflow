@@ -1,8 +1,8 @@
 use crate::build;
 use crate::cases;
 use crate::cli::{
-    BuildArgs, CaseArgs, CaseCommand, ColorArg, Command as CliCommand, DiffArgs, ExecArgs,
-    StressArgs, TestArgs,
+    BuildArgs, CaseArgs, CaseCommand, ColorArg, Command as CliCommand, CompleteArgs, DiffArgs,
+    ExecArgs, StressArgs, TestArgs,
 };
 use crate::config::{parse_duration, ColorPolicy, Config};
 use crate::error::{AppError, AppResult};
@@ -54,9 +54,59 @@ pub fn execute(command: CliCommand, globals: GlobalOptions) -> AppResult<i32> {
         CliCommand::Stress(args) => execute_stress(args, globals),
         CliCommand::Doctor => execute_doctor(globals),
         CliCommand::Completions(args) => {
-            let mut command = crate::cli::Cli::command();
-            clap_complete::generate(args.shell, &mut command, "run-cli", &mut io::stdout());
+            generate_completions(args.shell);
             Ok(0)
+        }
+        CliCommand::Complete(args) => execute_complete(args),
+    }
+}
+
+fn execute_complete(args: CompleteArgs) -> AppResult<i32> {
+    let cursor = args.cursor.unwrap_or(args.line.len());
+    for candidate in crate::suggest::complete_cli(&args.line, cursor) {
+        println!("{}\t{}", candidate.value, candidate.description);
+    }
+    Ok(0)
+}
+
+fn generate_completions(shell: clap_complete::Shell) {
+    match shell {
+        clap_complete::Shell::Bash => print!(
+            r#"_run_cli_complete() {{
+    local entry
+    COMPREPLY=()
+    while IFS= read -r entry; do
+        COMPREPLY+=("${{entry%%$'\t'*}}")
+    done < <(run-cli __complete --line "$COMP_LINE" --cursor "$COMP_POINT")
+}}
+complete -F _run_cli_complete run-cli
+"#
+        ),
+        clap_complete::Shell::Zsh => print!(
+            r#"#compdef run-cli
+_run_cli_complete() {{
+    local -a entries values
+    local prefix="${{BUFFER[1,$CURSOR]}}"
+    entries=("${{(@f)$(run-cli __complete --line "$prefix")}}")
+    local entry
+    for entry in $entries; do
+        values+=("${{entry%%$'\t'*}}")
+    done
+    compadd -Q -- $values
+}}
+compdef _run_cli_complete run-cli
+"#
+        ),
+        clap_complete::Shell::Fish => print!(
+            r#"function __run_cli_complete
+    run-cli __complete --line (commandline -cp)
+end
+complete -c run-cli -f -a '(__run_cli_complete)'
+"#
+        ),
+        _ => {
+            let mut command = crate::cli::Cli::command();
+            clap_complete::generate(shell, &mut command, "run-cli", &mut io::stdout());
         }
     }
 }

@@ -9,7 +9,8 @@ It supports C++, Python, C, Java, Rust, Go, and Kotlin and reads the same `<stem
 
 ## Install
 
-Requires Rust 1.74 or newer and the language toolchains you intend to use.
+Download a prebuilt GNU or musl archive from the GitHub Releases page, or build
+from source with Rust 1.74 or newer:
 
 ```sh
 cargo install --path .
@@ -31,7 +32,9 @@ Open a session for a source:
 run-cli A.cpp
 ```
 
-Run `run-cli` without a source to choose from supported files in the current directory. Inside a session:
+Run `run-cli` without a source to open a fuzzy source picker: type any
+subsequence of the path to filter it, use arrows to move, and press Enter to
+select. Inside a session:
 
 ```text
 /run
@@ -50,9 +53,9 @@ Run `run-cli` without a source to choose from supported files in the current dir
 /quit
 ```
 
-Press Tab at command and path positions to open context-aware suggestions. Source positions prioritize supported language files, inputs prioritize saved cases and `.in`/`.txt` files, and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths containing spaces are quoted automatically.
+Press Tab at command and path positions to open context-aware suggestions. Source positions prioritize supported language files, inputs prioritize saved cases and `.in`/`.txt` files, and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths containing spaces are quoted automatically. Completion lists are scrollable, resize-aware, and capped to the available terminal height.
 
-Source pickers and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse reporting is disabled while a submitted program owns the terminal and on every normal, error, panic, or handled-signal exit.
+Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse reporting is enabled only while an interactive control owns it, disabled while a submitted program owns the terminal, and cleaned up on every normal, error, panic, or handled-signal exit.
 
 ## One-shot commands
 
@@ -91,7 +94,13 @@ run-cli stress A.cpp --brute brute.cpp --generator generator.py
 
 # Shell completion
 run-cli completions zsh > ~/.zfunc/_run-cli
+run-cli completions bash > ~/.local/share/bash-completion/completions/run-cli
+run-cli completions fish > ~/.config/fish/completions/run-cli.fish
 ```
+
+Bash, Zsh, and Fish integrations call the same parser-aware filtering and
+ranking engine used by the REPL, so source, input, output, and expected-file
+suggestions remain consistent in both interfaces.
 
 When stdout is redirected, `run-cli` leaves it exclusively for program output. Build messages, errors, and resource measurements go to stderr. An explicit output file is replaced atomically only after a successful run.
 
@@ -155,6 +164,10 @@ Defaults are 1,000 cases and two seconds for each process.
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
+scripts/package-release.sh
 ```
 
 `run.sh` remains unchanged as the compatibility reference during migration.
+CI runs unit, parity, PTY, and all available real-toolchain tests. Its clean
+Ubuntu environment installs Kotlin directly, avoiding the local Snap/AppArmor
+failure that can affect sandboxed `kotlinc` installations.

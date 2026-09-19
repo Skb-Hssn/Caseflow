@@ -1,4 +1,5 @@
 /target/
+/dist/
 /.rn-build/
 .*.run-cli.*.tmp
 a.cpp
@@ -7,4 +8,3 @@ a.in1
 a.ky
 a.kt
 a.py
-run.sh

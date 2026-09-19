@@ -50,6 +50,9 @@ pub enum Command {
     Doctor,
     /// Generate shell completions.
     Completions(CompletionsArgs),
+    /// Internal completion protocol used by generated shell integrations.
+    #[command(name = "__complete", hide = true)]
+    Complete(CompleteArgs),
 }
 
 #[derive(Debug, Args)]
@@ -206,6 +209,15 @@ pub struct StressArgs {
 pub struct CompletionsArgs {
     #[arg(value_enum)]
     pub shell: clap_complete::Shell,
+}
+
+#[derive(Debug, Args)]
+pub struct CompleteArgs {
+    #[arg(long)]
+    pub line: String,
+
+    #[arg(long)]
+    pub cursor: Option<usize>,
 }
 
 #[cfg(test)]

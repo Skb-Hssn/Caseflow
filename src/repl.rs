@@ -2,20 +2,14 @@ use crate::cases;
 use crate::cli::Cli;
 use crate::commands::{self, GlobalOptions};
 use crate::config::Config;
+use crate::editor::{EditorSignal, LineEditor};
 use crate::error::{AppError, AppResult};
 use crate::model::{BuildMode, SourceSpec};
 use crate::source::{resolve_source, scan_sources};
-use crate::suggest::RunCompleter;
 use crate::terminal;
 use crate::ui::Ui;
 use clap::Parser;
-use reedline::{
-    default_emacs_keybindings, ColumnarMenu, DefaultPrompt, DefaultPromptSegment, EditCommand,
-    Emacs, FileBackedHistory, KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent,
-    ReedlineMenu, Signal,
-};
 use std::ffi::OsString;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> {
@@ -32,69 +26,24 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
         .ui
         .welcome(&session.source, session.mode, session.mouse);
 
-    let history_path = session.config.state_dir.join("history.txt");
-    let history = if let Err(error) = fs::create_dir_all(&session.config.state_dir) {
-        session
-            .ui
-            .warning(format!("Command history will not be persisted: {error}"));
-        FileBackedHistory::new(1000)
-            .map_err(|error| AppError::new(format!("cannot initialize command history: {error}")))?
-    } else {
-        match FileBackedHistory::with_file(1000, history_path) {
-            Ok(history) => history,
-            Err(error) => {
-                session
-                    .ui
-                    .warning(format!("Command history will not be persisted: {error}"));
-                FileBackedHistory::new(1000).map_err(|error| {
-                    AppError::new(format!("cannot initialize command history: {error}"))
-                })?
-            }
-        }
-    };
-    let completion_menu = ColumnarMenu::default()
-        .with_name("completion_menu")
-        .with_columns(1)
-        .with_column_padding(2);
-    let mut keybindings = default_emacs_keybindings();
-    keybindings.add_binding(
-        KeyModifiers::NONE,
-        KeyCode::Tab,
-        ReedlineEvent::UntilFound(vec![
-            ReedlineEvent::Menu("completion_menu".to_string()),
-            ReedlineEvent::MenuNext,
-        ]),
-    );
-    keybindings.add_binding(
-        KeyModifiers::ALT,
-        KeyCode::Enter,
-        ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
-    );
-    let mut editor = Reedline::create()
-        .with_history(Box::new(history))
-        .with_completer(Box::<RunCompleter>::default())
-        .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
-        .with_edit_mode(Box::new(Emacs::new(keybindings)));
+    let mut editor = LineEditor::new(session.config.state_dir.join("history.txt"), session.mouse);
+    if let Some(warning) = editor.take_warning() {
+        session.ui.warning(warning);
+    }
 
     loop {
-        let prompt = DefaultPrompt::new(
-            DefaultPromptSegment::Basic(format!(
-                "run-cli:{} [{}] ",
-                session
-                    .source
-                    .path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("source"),
-                session.mode
-            )),
-            DefaultPromptSegment::Empty,
+        let prompt = format!(
+            "run-cli:{} [{}] › ",
+            session
+                .source
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("source"),
+            session.mode
         );
-        match editor
-            .read_line(&prompt)
-            .map_err(|error| AppError::new(format!("terminal input failed: {error}")))?
-        {
-            Signal::Success(line) => {
+        match editor.read_line(&prompt)? {
+            EditorSignal::Success(line) => {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -104,11 +53,15 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                     Ok(SessionAction::Exit) => return Ok(0),
                     Err(error) => session.ui.error(error.message),
                 }
+                editor.set_mouse(session.mouse);
+                if let Some(warning) = editor.take_warning() {
+                    session.ui.warning(warning);
+                }
             }
-            Signal::CtrlC => {
+            EditorSignal::CtrlC => {
                 eprintln!("^C");
             }
-            Signal::CtrlD => return Ok(0),
+            EditorSignal::CtrlD => return Ok(0),
         }
     }
 }

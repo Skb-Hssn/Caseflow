@@ -3,6 +3,7 @@ mod cases;
 mod cli;
 mod commands;
 mod config;
+mod editor;
 mod error;
 mod model;
 mod process;

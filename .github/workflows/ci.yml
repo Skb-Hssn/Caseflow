@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Kotlin
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes kotlin
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all-targets --locked
+      - run: cargo build --release --locked
+      - run: bash -n run.sh scripts/package-release.sh
+      - name: Verify package
+        run: scripts/package-release.sh

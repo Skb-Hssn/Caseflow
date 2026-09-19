@@ -1,6 +1,7 @@
 use crate::config::ColorPolicy;
 use crate::model::{BuildMode, RunReport, SourceSpec};
 use std::io::{self, IsTerminal};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[derive(Debug, Clone)]
 pub struct Ui {
@@ -30,11 +31,15 @@ impl Ui {
         let detail = detail.as_ref();
         let color = if self.color { "\x1b[36;1m" } else { "" };
         let reset = if self.color { "\x1b[0m" } else { "" };
-        if detail.is_empty() {
-            eprintln!("{color}━━ {title} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{reset}");
+        let width = terminal_width().min(88);
+        let label = if detail.is_empty() {
+            format!("━━ {title} ")
         } else {
-            eprintln!("{color}━━ {title} · {detail} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{reset}");
-        }
+            format!("━━ {title} · {detail} ")
+        };
+        let mut line = truncate_width(&label, width);
+        line.push_str(&"━".repeat(width.saturating_sub(UnicodeWidthStr::width(line.as_str()))));
+        eprintln!("{color}{line}{reset}");
     }
 
     pub fn info(&self, message: impl AsRef<str>) {
@@ -92,31 +97,65 @@ impl Ui {
     }
 
     pub fn welcome(&self, source: &SourceSpec, mode: BuildMode, mouse: bool) {
-        let width = 64;
+        let width = terminal_width().min(64);
+        if width < 28 {
+            eprintln!("run-cli {}", env!("CARGO_PKG_VERSION"));
+            eprintln!(
+                "source: {}",
+                truncate_width(&source.path.display().to_string(), width)
+            );
+            eprintln!(
+                "{} · {} · mouse {}",
+                source.language,
+                mode,
+                if mouse { "on" } else { "off" }
+            );
+            eprintln!("Type /help for commands.\n");
+            return;
+        }
         let line = "─".repeat(width - 2);
         eprintln!("╭{line}╮");
-        eprintln!("│  run-cli {:<52}│", env!("CARGO_PKG_VERSION"));
-        eprintln!(
-            "│  source: {:<52}│",
-            truncate(&source.path.display().to_string(), 52)
+        print_box_row(&format!("run-cli {}", env!("CARGO_PKG_VERSION")), width);
+        print_box_row(&format!("source: {}", source.path.display()), width);
+        print_box_row(&format!("language: {}", source.language), width);
+        print_box_row(&format!("mode: {mode}"), width);
+        print_box_row(
+            &format!("mouse: {}", if mouse { "on" } else { "off" }),
+            width,
         );
-        eprintln!("│  language: {:<50}│", source.language.to_string());
-        eprintln!("│  mode: {:<54}│", mode.to_string());
-        eprintln!("│  mouse: {:<53}│", if mouse { "on" } else { "off" });
         eprintln!("╰{line}╯");
-        eprintln!("  Type /help for commands. File arguments support Tab completion.\n");
+        eprintln!("  Type /help for commands; press Tab for suggestions.\n");
     }
 }
 
-fn truncate(value: &str, width: usize) -> String {
-    let count = value.chars().count();
-    if count <= width {
+fn terminal_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(columns, _)| columns.max(1) as usize)
+        .unwrap_or(72)
+}
+
+fn print_box_row(value: &str, width: usize) {
+    let content_width = width.saturating_sub(4);
+    let value = truncate_width(value, content_width);
+    let padding = content_width.saturating_sub(UnicodeWidthStr::width(value.as_str()));
+    eprintln!("│ {value}{} │", " ".repeat(padding));
+}
+
+fn truncate_width(value: &str, width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= width {
         return value.to_string();
     }
-    let mut result = value
-        .chars()
-        .take(width.saturating_sub(1))
-        .collect::<String>();
+    let target = width.saturating_sub(1);
+    let mut used = 0;
+    let mut result = String::new();
+    for character in value.chars() {
+        let character_width = character.width().unwrap_or(0);
+        if used + character_width > target {
+            break;
+        }
+        result.push(character);
+        used += character_width;
+    }
     result.push('…');
     result
 }

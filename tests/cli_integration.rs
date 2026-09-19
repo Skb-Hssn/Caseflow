@@ -30,9 +30,14 @@ fn tool_exists(tool: &str) -> bool {
     let exists = std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|path| path.join(tool).is_file()))
         .unwrap_or(false);
+    let version_args: &[&str] = match tool {
+        "go" => &["version"],
+        "kotlinc" => &["-version"],
+        _ => &["--version"],
+    };
     exists
         && Command::new(tool)
-            .arg("--version")
+            .args(version_args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -210,4 +215,35 @@ fn timeout_returns_124() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(124));
+}
+
+#[test]
+fn dynamic_shell_completion_uses_ranked_file_suggestions() {
+    let directory = TempDir::new().unwrap();
+    fs::write(directory.path().join("answer.cpp"), "int main() {}\n").unwrap();
+    fs::write(directory.path().join("answer.txt"), "not a source\n").unwrap();
+    let line = "run-cli exec ans";
+    let output = command(&directory)
+        .current_dir(directory.path())
+        .arg("__complete")
+        .arg("--line")
+        .arg(line)
+        .arg("--cursor")
+        .arg(line.len().to_string())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let suggestions = String::from_utf8(output.stdout).unwrap();
+    assert!(suggestions.starts_with("answer.cpp\t"), "{suggestions}");
+    assert!(!suggestions.contains("answer.txt"));
+
+    for shell in ["bash", "zsh", "fish"] {
+        let generated = command(&directory)
+            .arg("completions")
+            .arg(shell)
+            .output()
+            .unwrap();
+        assert!(generated.status.success());
+        assert!(String::from_utf8_lossy(&generated.stdout).contains("__complete"));
+    }
 }

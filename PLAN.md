@@ -67,7 +67,7 @@ Decorative UI appears only on terminals. In pipelines, child stdout stays clean 
 
 ## Implementation Changes
 
-- Create a Rust binary using `clap` for one-shot parsing, `reedline` for the inline REPL, `serde`/`toml` for configuration, and Unix process APIs for process groups, signals, `wait4` resource metrics, and file locking.
+- Create a Rust binary using `clap` for one-shot parsing, a small `crossterm`-based line editor for the inline REPL, `serde`/`toml` for configuration, and Unix process APIs for process groups, signals, `wait4` resource metrics, and file locking. Owning the editor permits exact mouse hit-testing and deterministic terminal restoration.
 - Separate the core into source resolution, language toolchains, build, execution, saved cases, comparison, stress testing, clipboard, configuration, and terminal presentation services. Both interfaces call the same services.
 - Model operations with typed structures such as `Language`, `BuildMode`, `SourceSpec`, `RunRequest`, `RunReport`, `CaseSelector`, and `StressRequest`; UI code must not construct shell command strings.
 - Implement one parser-aware path-suggestion service shared by the REPL and generated shell completions. It derives the expected path kind from the command and cursor position, reads the filesystem on demand so suggestions stay current, ranks relevant extensions first, and applies output-safety exclusions before rendering candidates.
@@ -91,6 +91,13 @@ Decorative UI appears only on terminals. In pipelines, child stdout stays clean 
 - Keep `run.sh` unchanged during migration. Existing `.in<ID>` files require no conversion; `.rn-build` is neither reused nor automatically deleted.
 
 ## Test and Acceptance Plan
+
+The automated suite now includes PTY tests for REPL commands, resize handling,
+Ctrl-C forwarding, mouse file selection, and terminal restoration. Differential
+tests cover concurrent saves, signal behavior, configuration precedence,
+clipboard failures, and unusual filenames. CI runs the suite with all supported
+toolchains, including a non-Snap Kotlin installation, and tagged releases build
+GNU and musl archives with SHA-256 checksums.
 
 - Unit-test source resolution, extensionless C++, config precedence, duration parsing, case ordering, command construction, Java package parsing, output-safety checks, path-token parsing, candidate filtering, and suggestion ranking.
 - Add isolated integration fixtures for all seven languages and both build modes. Use fake toolchains for deterministic failure tests and a CI image containing the real toolchains for end-to-end coverage.
