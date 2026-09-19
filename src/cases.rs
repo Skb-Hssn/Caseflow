@@ -63,7 +63,7 @@ pub fn lock_cases(source: &SourceSpec, config: &Config) -> AppResult<CaseLock> {
 }
 
 pub fn list(source: &SourceSpec) -> AppResult<Vec<SavedCase>> {
-    let parent = source.stem.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_or_current(&source.stem);
     let stem_name = source
         .stem
         .file_name()
@@ -263,7 +263,7 @@ pub fn command_exists(command: &str) -> bool {
 }
 
 fn atomic_write(destination: &Path, contents: &[u8]) -> AppResult<()> {
-    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_or_current(destination);
     let name = destination
         .file_name()
         .and_then(|name| name.to_str())
@@ -301,12 +301,18 @@ fn atomic_write(destination: &Path, contents: &[u8]) -> AppResult<()> {
 }
 
 fn canonical_stem(source: &SourceSpec) -> PathBuf {
-    let parent = source.stem.parent().unwrap_or_else(|| Path::new("."));
+    let parent = parent_or_current(&source.stem);
     let parent = fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
     match source.stem.file_name() {
         Some(name) => parent.join(name),
         None => parent,
     }
+}
+
+fn parent_or_current(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 #[cfg(test)]
@@ -335,5 +341,12 @@ mod tests {
         assert_eq!(ids, vec![1, 3]);
         assert_eq!(next_id(&source).unwrap(), 4);
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn relative_case_paths_use_the_current_directory() {
+        let source = resolve_source("a.cpp").unwrap();
+        assert_eq!(parent_or_current(&source.stem), Path::new("."));
+        assert_eq!(case_path(&source, 1), PathBuf::from("a.in1"));
     }
 }

@@ -38,6 +38,8 @@ select. Inside a session:
 
 ```text
 /run
+/run interactive
+/run clipboard
 /run --input sample.in --output answer.out
 /run --save
 /mode debug
@@ -45,7 +47,7 @@ select. Inside a session:
 /test all
 /test 1,3
 /case list
-/case paste next --run
+/case paste next --run     # equivalent to /run clipboard
 /diff 1 expected.out
 /stress brute.cpp generator.py --limit 500 --timeout 2
 /source B.cpp
@@ -54,14 +56,18 @@ select. Inside a session:
 ```
 
 Typing `/` opens a dimmed command menu immediately; continue typing to filter
-it or press Tab to insert the highlighted full command. Press Tab at path
-positions to open context-aware file suggestions. Source positions prioritize
+it or press Tab to insert the highlighted full command. Options and files also
+appear passively when they become relevant after a command; Tab accepts the
+highlighted choice. Source positions prioritize
 supported language files, inputs prioritize saved cases and `.in`/`.txt` files,
 and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths
 containing spaces are quoted automatically. Completion lists are scrollable,
 resize-aware, and capped to the available terminal height.
 
-Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with `Run`, `Build`, and `Test` buttons (`Test` runs all saved cases). Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit.
+Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with separate `Interactive` and `Clipboard` run buttons, `Build`, each saved case number, and `All`. Clipboard run saves the clipboard as the next case before executing it, so it can be rerun from its numbered button. Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit.
+
+The toolbar uses compact labels on narrow terminals: `I` is interactive run,
+`C` is clipboard run, `B` is build, and `A` tests all saved cases.
 
 ## One-shot commands
 
@@ -126,6 +132,8 @@ A.in2
 - `--last` selects the newest modification time, breaking ties with the highest ID.
 - Concurrent writers use a shared file lock.
 - Clipboard access prefers `wl-copy`/`wl-paste`, then `xclip`.
+- In the REPL, `/run clipboard` is the short form of saving the clipboard as
+  the next case and immediately running it.
 
 Interactive deletion asks for confirmation. One-shot deletion and clearing require `--force`.
 

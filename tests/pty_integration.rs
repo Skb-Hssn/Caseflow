@@ -3,6 +3,7 @@
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::fs;
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -215,8 +216,8 @@ fn persistent_mouse_toolbar_runs_the_active_source() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('toolbar-run')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Run ]");
-    // The toolbar is fixed to row 24; Run starts after the "Actions" label.
+    session.wait_for("[ Interactive ]");
+    // The toolbar is fixed to row 24; this lands inside Interactive.
     session.send(b"\x1b[<0;13;24M");
     session.wait_for("toolbar-run");
     session.wait_for("Success (exit 0)");
@@ -229,16 +230,66 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Run ]");
-    assert_eq!(session.text().matches("[ Run ]").count(), 1);
+    session.wait_for("[ Interactive ]");
+    assert_eq!(session.text().matches("[ Interactive ]").count(), 1);
     session.send(b"/xyz");
     session.wait_for("/xyz");
     assert_eq!(
-        session.text().matches("[ Run ]").count(),
+        session.text().matches("[ Interactive ]").count(),
         1,
         "toolbar should remain static during prompt redraws"
     );
     session.send(b"\x03");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn clipboard_run_alias_saves_and_runs_the_next_case() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "a, b = map(int, input().split())\nprint(a + b)\n",
+    );
+    let bin = directory.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let clipboard = bin.join("wl-paste");
+    fs::write(&clipboard, "#!/bin/sh\nprintf '2 3\\n'\n").unwrap();
+    fs::set_permissions(&clipboard, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = repl_command(&directory, &source, false);
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    command.env(
+        "PATH",
+        std::env::join_paths(
+            std::iter::once(bin.clone()).chain(std::env::split_paths(&inherited_path)),
+        )
+        .unwrap(),
+    );
+    let session = PtySession::spawn(command);
+    session.wait_for("run-cli:main.py");
+    session.send(b"/run clipboard\r");
+    session.wait_for("Saved input #1");
+    session.wait_for("\r\n5\r\n");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+    assert_eq!(
+        fs::read_to_string(directory.path().join("main.in1")).unwrap(),
+        "2 3\n"
+    );
+}
+
+#[test]
+fn mouse_toolbar_runs_a_specific_numbered_case() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip())\n");
+    fs::write(directory.path().join("main.in7"), "case-seven\n").unwrap();
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[ 7 ]");
+    session.wait_for("[ All ]");
+    // The first numbered case begins at zero-based column 53 on the full bar.
+    session.send(b"\x1b[<0;54;24M");
+    session.wait_for("case-seven");
+    session.wait_for("Success (exit 0)");
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }

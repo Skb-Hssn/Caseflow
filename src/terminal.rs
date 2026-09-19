@@ -1,4 +1,5 @@
 use crate::error::{AppError, AppResult};
+use crate::theme;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
@@ -169,7 +170,7 @@ pub fn confirm(prompt: &str, action: &str, mouse: bool, color: bool) -> AppResul
         let mut stderr = io::stderr();
         queue!(stderr, MoveTo(0, row), Clear(ClearType::FromCursorDown))?;
         if color {
-            queue!(stderr, SetForegroundColor(Color::Yellow))?;
+            queue!(stderr, SetForegroundColor(theme::WARNING))?;
         }
         queue!(
             stderr,
@@ -189,7 +190,7 @@ pub fn confirm(prompt: &str, action: &str, mouse: bool, color: bool) -> AppResul
             selected == 0,
             compact,
             color,
-            Color::Red,
+            theme::DANGER,
         )?;
         queue!(stderr, Print("  "))?;
         draw_tinted_button(
@@ -198,7 +199,7 @@ pub fn confirm(prompt: &str, action: &str, mouse: bool, color: bool) -> AppResul
             selected == 1,
             compact,
             color,
-            Color::DarkGrey,
+            theme::MUTED,
         )?;
         stderr.flush()?;
         match event::read()? {
@@ -357,7 +358,7 @@ fn render_picker(
         Clear(ClearType::FromCursorDown)
     )?;
     if color {
-        queue!(stderr, SetForegroundColor(Color::Cyan))?;
+        queue!(stderr, SetForegroundColor(theme::PRIMARY))?;
     }
     queue!(
         stderr,
@@ -372,7 +373,7 @@ fn render_picker(
         MoveTo(0, *start_row + 1)
     )?;
     if color {
-        queue!(stderr, SetForegroundColor(Color::Yellow))?;
+        queue!(stderr, SetForegroundColor(theme::PRIMARY_SOFT))?;
     }
     queue!(
         stderr,
@@ -402,8 +403,8 @@ fn render_picker(
         if is_selected && color {
             queue!(
                 stderr,
-                SetForegroundColor(Color::Black),
-                SetBackgroundColor(Color::Cyan),
+                SetForegroundColor(theme::ON_ACCENT),
+                SetBackgroundColor(theme::PRIMARY),
                 SetAttribute(Attribute::Bold)
             )?;
         } else if is_selected {
@@ -432,7 +433,7 @@ fn render_picker(
             button == 0,
             false,
             color,
-            Color::Green,
+            theme::PRIMARY,
         )?;
         queue!(stderr, Print("  "))?;
         draw_tinted_button(
@@ -441,13 +442,13 @@ fn render_picker(
             button == 1,
             false,
             color,
-            Color::DarkGrey,
+            theme::MUTED,
         )?;
         (10, 12, 21)
     } else {
-        draw_tinted_button(&mut stderr, "OK", button == 0, true, color, Color::Green)?;
+        draw_tinted_button(&mut stderr, "OK", button == 0, true, color, theme::PRIMARY)?;
         queue!(stderr, Print(" "))?;
-        draw_tinted_button(&mut stderr, "X", button == 1, true, color, Color::DarkGrey)?;
+        draw_tinted_button(&mut stderr, "X", button == 1, true, color, theme::MUTED)?;
         (4, 5, 8)
     };
     if matches.len() > visible && !matches.is_empty() {
@@ -516,7 +517,7 @@ fn draw_tinted_button(
     if selected {
         queue!(
             output,
-            SetForegroundColor(Color::Black),
+            SetForegroundColor(theme::ON_ACCENT),
             SetBackgroundColor(tint),
             SetAttribute(Attribute::Bold)
         )?;

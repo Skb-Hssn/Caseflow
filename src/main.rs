@@ -11,6 +11,7 @@ mod repl;
 mod source;
 mod suggest;
 mod terminal;
+mod theme;
 mod ui;
 
 use clap::Parser;

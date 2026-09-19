@@ -37,6 +37,12 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
 
     let mut first_prompt = true;
     loop {
+        editor.set_case_ids(
+            cases::list(&session.source)?
+                .into_iter()
+                .map(|saved| saved.id)
+                .collect(),
+        );
         if !first_prompt {
             eprintln!();
         }
@@ -70,11 +76,13 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
             }
             EditorSignal::Action(action) => {
                 let command = match action {
-                    EditorAction::Run => "/run",
-                    EditorAction::Build => "/build",
-                    EditorAction::Test => "/test all",
+                    EditorAction::RunInteractive => "/run interactive".to_string(),
+                    EditorAction::RunClipboard => "/run clipboard".to_string(),
+                    EditorAction::Build => "/build".to_string(),
+                    EditorAction::TestCase(id) => format!("/test {id}"),
+                    EditorAction::TestAll => "/test all".to_string(),
                 };
-                match session.handle(command) {
+                match session.handle(&command) {
                     Ok(SessionAction::Continue) => {}
                     Ok(SessionAction::Exit) => return Ok(0),
                     Err(error) => session.ui.error(error.message),
@@ -185,9 +193,32 @@ impl Session {
                 Ok(SessionAction::Continue)
             }
             "/run" => {
-                let mut args = vec![OsString::from("run-cli"), OsString::from("exec")];
-                args.push(self.source.requested.as_os_str().to_owned());
-                args.extend(tokens.iter().skip(1).map(OsString::from));
+                let mode = tokens.get(1).map(String::as_str);
+                if mode == Some("clipboard") {
+                    let mut args = vec![
+                        OsString::from("run-cli"),
+                        OsString::from("case"),
+                        OsString::from("paste"),
+                        self.source.requested.as_os_str().to_owned(),
+                        OsString::from("--next"),
+                        OsString::from("--run"),
+                    ];
+                    args.extend(tokens.iter().skip(2).map(OsString::from));
+                    self.execute(args)?;
+                    return Ok(SessionAction::Continue);
+                }
+                let option_start = if mode == Some("interactive") { 2 } else { 1 };
+                if mode.is_some_and(|value| !value.starts_with('-') && value != "interactive") {
+                    return Err(AppError::usage(
+                        "usage: /run [interactive|clipboard] [OPTIONS]",
+                    ));
+                }
+                let mut args = vec![
+                    OsString::from("run-cli"),
+                    OsString::from("exec"),
+                    self.source.requested.as_os_str().to_owned(),
+                ];
+                args.extend(tokens.iter().skip(option_start).map(OsString::from));
                 self.execute(args)?;
                 Ok(SessionAction::Continue)
             }
@@ -358,7 +389,8 @@ fn print_help() {
     println!(
         "\
 RUN
-  /run [--timeout SEC] [--save-input] [-i FILE] [-o FILE]
+  /run [interactive] [--timeout SEC] [--save-input] [-i FILE] [-o FILE]
+  /run clipboard [--debug]   save clipboard as next case and run it
   /build [--debug]
   /test all|last|ID[,ID...]
 

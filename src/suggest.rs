@@ -250,6 +250,10 @@ fn expected_literals(
             ("last", "most recently modified case"),
         ],
         "/case" if relative <= 1 => case_actions(),
+        "/run" if relative <= 1 => repl_run_options(),
+        "/run" if tokens.get(command_index + 1).map(String::as_str) == Some("clipboard") => {
+            vec![("--debug", "use debug build settings")]
+        }
         "/run" => run_options(),
         "exec" => run_options(),
         "build" => vec![("--debug", "use debug build settings")],
@@ -279,6 +283,15 @@ fn run_options() -> Vec<(&'static str, &'static str)> {
         ("--save-input", "save interactive stdin"),
         ("--debug", "use debug build settings"),
     ]
+}
+
+fn repl_run_options() -> Vec<(&'static str, &'static str)> {
+    let mut options = vec![
+        ("interactive", "run with terminal input"),
+        ("clipboard", "save clipboard as the next case and run"),
+    ];
+    options.extend(run_options());
+    options
 }
 
 fn case_actions() -> Vec<(&'static str, &'static str)> {
@@ -468,6 +481,24 @@ mod tests {
         assert!(repl.iter().any(|candidate| candidate.value == "/stress"));
         let cli = complete_cli("run-cli st", 10);
         assert!(cli.iter().any(|candidate| candidate.value == "stress"));
+    }
+
+    #[test]
+    fn run_modes_are_suggested_before_run_options() {
+        let line = "/run ";
+        let candidates = complete_repl(line, line.len());
+        assert!(candidates.iter().any(|item| item.value == "interactive"));
+        assert!(candidates.iter().any(|item| item.value == "clipboard"));
+
+        let line = "/run clipboard ";
+        let candidates = complete_repl(line, line.len());
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|item| item.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["--debug"]
+        );
     }
 
     #[test]

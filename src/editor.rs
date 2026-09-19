@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::suggest::{self, Completion};
 use crate::terminal as terminal_state;
+use crate::theme;
 use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -23,11 +24,13 @@ pub enum EditorSignal {
     CtrlD,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorAction {
-    Run,
+    RunInteractive,
+    RunClipboard,
     Build,
-    Test,
+    TestCase(u64),
+    TestAll,
 }
 
 pub struct LineEditor {
@@ -35,6 +38,7 @@ pub struct LineEditor {
     history_path: Option<PathBuf>,
     mouse: bool,
     color: bool,
+    case_ids: Vec<u64>,
     warning: Option<String>,
 }
 
@@ -63,7 +67,14 @@ struct CompletionMenu {
     dimmed: bool,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Clone, Copy)]
+struct ToolbarRegion {
+    start: u16,
+    end: u16,
+    action: EditorAction,
+}
+
+#[derive(Default, Clone)]
 struct Layout {
     candidate_row: u16,
     visible_candidates: usize,
@@ -72,12 +83,7 @@ struct Layout {
     cancel_start: u16,
     cancel_end: u16,
     toolbar_row: u16,
-    run_start: u16,
-    run_end: u16,
-    build_start: u16,
-    build_end: u16,
-    test_start: u16,
-    test_end: u16,
+    toolbar_regions: Vec<ToolbarRegion>,
 }
 
 #[derive(Default)]
@@ -91,9 +97,10 @@ struct RenderState {
 }
 
 #[derive(Clone, Copy)]
-struct RenderOptions {
+struct RenderOptions<'a> {
     show_toolbar: bool,
     color: bool,
+    case_ids: &'a [u64],
 }
 
 impl LineEditor {
@@ -122,6 +129,7 @@ impl LineEditor {
             history_path,
             mouse,
             color,
+            case_ids: Vec::new(),
             warning,
         }
     }
@@ -136,6 +144,10 @@ impl LineEditor {
 
     pub fn set_color(&mut self, color: bool) {
         self.color = color;
+    }
+
+    pub fn set_case_ids(&mut self, case_ids: Vec<u64>) {
+        self.case_ids = case_ids;
     }
 
     pub fn read_line(&mut self, prompt: &str) -> AppResult<EditorSignal> {
@@ -163,6 +175,7 @@ impl LineEditor {
                 RenderOptions {
                     show_toolbar: self.mouse,
                     color: self.color,
+                    case_ids: &self.case_ids,
                 },
                 &mut render_state,
             )?;
@@ -206,21 +219,17 @@ impl LineEditor {
                 }
                 Event::Mouse(mouse_event) if mouse_capture => match mouse_event.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        let action = if mouse_event.row == layout.toolbar_row
-                            && (layout.run_start..layout.run_end).contains(&mouse_event.column)
-                        {
-                            Some(EditorAction::Run)
-                        } else if mouse_event.row == layout.toolbar_row
-                            && (layout.build_start..layout.build_end).contains(&mouse_event.column)
-                        {
-                            Some(EditorAction::Build)
-                        } else if mouse_event.row == layout.toolbar_row
-                            && (layout.test_start..layout.test_end).contains(&mouse_event.column)
-                        {
-                            Some(EditorAction::Test)
-                        } else {
-                            None
-                        };
+                        let action = (mouse_event.row == layout.toolbar_row)
+                            .then(|| {
+                                layout
+                                    .toolbar_regions
+                                    .iter()
+                                    .find(|region| {
+                                        (region.start..region.end).contains(&mouse_event.column)
+                                    })
+                                    .map(|region| region.action)
+                            })
+                            .flatten();
                         if let Some(action) = action {
                             execute!(io::stderr(), DisableMouseCapture)?;
                             finish_line(prompt, &buffer, anchor_row, self.color)?;
@@ -317,8 +326,15 @@ fn handle_key(
         }
         KeyCode::Tab => {
             if let Some(active) = menu.as_mut() {
-                apply_selected(buffer, cursor, active)?;
-                *menu = None;
+                let has_arguments = buffer[..(*cursor).min(buffer.len())]
+                    .chars()
+                    .any(char::is_whitespace);
+                if active.dimmed && has_arguments && active.candidates.len() > 1 {
+                    active.dimmed = false;
+                } else {
+                    apply_selected(buffer, cursor, active)?;
+                    *menu = None;
+                }
             } else {
                 let candidates = suggest::complete_repl(buffer, *cursor);
                 if candidates.len() == 1 {
@@ -419,7 +435,7 @@ fn activate_selection(menu: Option<&mut CompletionMenu>, direction: i32) {
 
 fn refresh_command_menu(buffer: &str, cursor: usize, menu: &mut Option<CompletionMenu>) {
     let before_cursor = &buffer[..cursor.min(buffer.len())];
-    if before_cursor.starts_with('/') && !before_cursor.chars().any(char::is_whitespace) {
+    if before_cursor.starts_with('/') {
         let candidates = suggest::complete_repl(buffer, cursor);
         if !candidates.is_empty() {
             *menu = Some(CompletionMenu {
@@ -539,9 +555,9 @@ fn render(
             queue!(
                 stderr,
                 SetForegroundColor(if active.dimmed {
-                    Color::DarkGrey
+                    theme::MUTED
                 } else {
-                    Color::Cyan
+                    theme::PRIMARY
                 })
             )?;
         }
@@ -577,13 +593,13 @@ fn render(
             if active.dimmed {
                 queue!(stderr, SetAttribute(Attribute::Dim))?;
                 if color {
-                    queue!(stderr, SetForegroundColor(Color::DarkGrey))?;
+                    queue!(stderr, SetForegroundColor(theme::MUTED))?;
                 }
             } else if is_selected && color {
                 queue!(
                     stderr,
-                    SetForegroundColor(Color::Black),
-                    SetBackgroundColor(Color::Cyan),
+                    SetForegroundColor(theme::ON_ACCENT),
+                    SetBackgroundColor(theme::PRIMARY),
                     SetAttribute(Attribute::Bold)
                 )?;
             } else if is_selected {
@@ -669,7 +685,7 @@ fn render(
             || state.toolbar_size != Some((width, height))
             || state.toolbar.is_none();
         if toolbar_changed {
-            if let Some(previous) = state.toolbar {
+            if let Some(previous) = state.toolbar.as_ref() {
                 if previous.toolbar_row != height - 1 && previous.toolbar_row < height {
                     queue!(
                         stderr,
@@ -678,11 +694,18 @@ fn render(
                     )?;
                 }
             }
-            draw_toolbar(&mut stderr, width, height - 1, color, &mut layout)?;
-            state.toolbar = Some(toolbar_only(layout));
+            draw_toolbar(
+                &mut stderr,
+                width,
+                height - 1,
+                color,
+                options.case_ids,
+                &mut layout,
+            )?;
+            state.toolbar = Some(toolbar_only(&layout));
             state.toolbar_size = Some((width, height));
             state.toolbar_dirty = false;
-        } else if let Some(toolbar) = state.toolbar {
+        } else if let Some(toolbar) = state.toolbar.as_ref() {
             copy_toolbar(&mut layout, toolbar);
         }
     } else if let Some(previous) = state.toolbar.take() {
@@ -738,7 +761,7 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
     let Some(rest) = prompt.strip_prefix("run-cli:") else {
         queue!(
             output,
-            SetForegroundColor(Color::Cyan),
+            SetForegroundColor(theme::PRIMARY),
             SetAttribute(Attribute::Bold),
             Print(prompt),
             SetAttribute(Attribute::Reset),
@@ -750,21 +773,21 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
     let mode = mode.strip_suffix(" › ").unwrap_or(mode);
     queue!(
         output,
-        SetForegroundColor(Color::Cyan),
+        SetForegroundColor(theme::PRIMARY),
         SetAttribute(Attribute::Bold),
         Print("run-cli"),
         SetAttribute(Attribute::Reset),
-        SetForegroundColor(Color::DarkGrey),
+        SetForegroundColor(theme::MUTED),
         Print(":"),
-        SetForegroundColor(Color::Yellow),
+        SetForegroundColor(theme::PRIMARY_SOFT),
         SetAttribute(Attribute::Bold),
         Print(source),
         SetAttribute(Attribute::Reset),
-        SetForegroundColor(Color::DarkGrey),
+        SetForegroundColor(theme::MUTED),
         Print(" · "),
-        SetForegroundColor(Color::Magenta),
+        SetForegroundColor(theme::MUTED),
         Print(mode),
-        SetForegroundColor(Color::Cyan),
+        SetForegroundColor(theme::PRIMARY),
         SetAttribute(Attribute::Bold),
         Print(" › "),
         SetAttribute(Attribute::Reset),
@@ -778,102 +801,252 @@ fn draw_toolbar(
     width: u16,
     row: u16,
     color: bool,
+    case_ids: &[u64],
     layout: &mut Layout,
 ) -> AppResult<()> {
     layout.toolbar_row = row;
     queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    let tiny = width < 12;
-    let compact = width < 30;
-    let prefix = if tiny {
-        ""
-    } else if width >= 40 {
-        "  Actions  "
-    } else {
-        " "
-    };
-    if color {
-        queue!(output, SetForegroundColor(Color::DarkGrey))?;
-    } else {
-        queue!(output, SetAttribute(Attribute::Dim))?;
-    }
-    queue!(
-        output,
-        Print(prefix),
-        SetAttribute(Attribute::Reset),
-        ResetColor
-    )?;
-    let mut column = UnicodeWidthStr::width(prefix) as u16;
-    let spacing = if tiny { " " } else { "  " };
+    layout.toolbar_regions.clear();
+    let compact = width < 60;
+    let mut column = 0_u16;
 
-    let run = toolbar_label("Run", "R", compact, tiny);
-    layout.run_start = column;
-    draw_toolbar_button(output, &run, color, Color::Green)?;
-    column += UnicodeWidthStr::width(run.as_str()) as u16;
-    layout.run_end = column;
-
-    queue!(output, Print(spacing))?;
-    column += UnicodeWidthStr::width(spacing) as u16;
-    let build = toolbar_label("Build", "B", compact, tiny);
-    layout.build_start = column;
-    draw_toolbar_button(output, &build, color, Color::Yellow)?;
-    column += UnicodeWidthStr::width(build.as_str()) as u16;
-    layout.build_end = column;
-
-    queue!(output, Print(spacing))?;
-    column += UnicodeWidthStr::width(spacing) as u16;
-    let test = toolbar_label("Test", "T", compact, tiny);
-    layout.test_start = column;
-    draw_toolbar_button(output, &test, color, Color::Magenta)?;
-    column += UnicodeWidthStr::width(test.as_str()) as u16;
-    layout.test_end = column;
-
-    if width.saturating_sub(column) >= 21 {
-        if color {
-            queue!(output, SetForegroundColor(Color::DarkGrey))?;
-        } else {
-            queue!(output, SetAttribute(Attribute::Dim))?;
-        }
-        queue!(
+    if width < 18 {
+        draw_toolbar_action(
             output,
-            Print("  mouse quick actions"),
-            SetAttribute(Attribute::Reset),
-            ResetColor
+            "I",
+            EditorAction::RunInteractive,
+            color,
+            theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_action(
+            output,
+            "C",
+            EditorAction::RunClipboard,
+            color,
+            theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_action(
+            output,
+            "B",
+            EditorAction::Build,
+            color,
+            theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, "T", color, &mut column)?;
+        draw_test_actions(
+            output,
+            width,
+            case_ids,
+            ToolbarDensity::Tiny,
+            color,
+            &mut column,
+            layout,
+        )?;
+    } else if compact {
+        draw_toolbar_text(output, " R", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[I]",
+            EditorAction::RunInteractive,
+            color,
+            theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_action(
+            output,
+            "[C]",
+            EditorAction::RunClipboard,
+            color,
+            theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_action(
+            output,
+            "[B]",
+            EditorAction::Build,
+            color,
+            theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, " T", color, &mut column)?;
+        draw_test_actions(
+            output,
+            width,
+            case_ids,
+            ToolbarDensity::Compact,
+            color,
+            &mut column,
+            layout,
+        )?;
+    } else {
+        draw_toolbar_text(output, "  Run ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[ Interactive ]",
+            EditorAction::RunInteractive,
+            color,
+            theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[ Clipboard ]",
+            EditorAction::RunClipboard,
+            color,
+            theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, "  ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[ Build ]",
+            EditorAction::Build,
+            color,
+            theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, "  Test ", color, &mut column)?;
+        draw_test_actions(
+            output,
+            width,
+            case_ids,
+            ToolbarDensity::Full,
+            color,
+            &mut column,
+            layout,
         )?;
     }
     Ok(())
 }
 
-fn toolbar_only(layout: Layout) -> Layout {
+fn draw_test_actions(
+    output: &mut impl Write,
+    width: u16,
+    case_ids: &[u64],
+    density: ToolbarDensity,
+    color: bool,
+    column: &mut u16,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    let all_label = match density {
+        ToolbarDensity::Tiny => "A",
+        ToolbarDensity::Compact => "[A]",
+        ToolbarDensity::Full => "[ All ]",
+    };
+    let all_width = UnicodeWidthStr::width(all_label) as u16;
+    let mut omitted = false;
+    for id in case_ids {
+        let label = match density {
+            ToolbarDensity::Tiny => id.to_string(),
+            ToolbarDensity::Compact => format!("[{id}]"),
+            ToolbarDensity::Full => format!("[ {id} ]"),
+        };
+        let needed = UnicodeWidthStr::width(label.as_str()) as u16 + 1;
+        if column.saturating_add(needed).saturating_add(all_width) > width {
+            omitted = true;
+            break;
+        }
+        draw_toolbar_action(
+            output,
+            &label,
+            EditorAction::TestCase(*id),
+            color,
+            theme::PRIMARY,
+            column,
+            layout,
+        )?;
+        draw_toolbar_text(output, " ", color, column)?;
+    }
+    if omitted && column.saturating_add(2).saturating_add(all_width) <= width {
+        draw_toolbar_text(output, "… ", color, column)?;
+    }
+    if column.saturating_add(all_width) <= width {
+        draw_toolbar_action(
+            output,
+            all_label,
+            EditorAction::TestAll,
+            color,
+            theme::PRIMARY,
+            column,
+            layout,
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ToolbarDensity {
+    Tiny,
+    Compact,
+    Full,
+}
+
+fn draw_toolbar_text(
+    output: &mut impl Write,
+    text: &str,
+    color: bool,
+    column: &mut u16,
+) -> AppResult<()> {
+    if color {
+        queue!(output, SetForegroundColor(theme::MUTED))?;
+    } else {
+        queue!(output, SetAttribute(Attribute::Dim))?;
+    }
+    queue!(
+        output,
+        Print(text),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    *column = column.saturating_add(UnicodeWidthStr::width(text) as u16);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_toolbar_action(
+    output: &mut impl Write,
+    label: &str,
+    action: EditorAction,
+    color: bool,
+    background: Color,
+    column: &mut u16,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    let start = *column;
+    draw_toolbar_button(output, label, color, background)?;
+    *column = column.saturating_add(UnicodeWidthStr::width(label) as u16);
+    layout.toolbar_regions.push(ToolbarRegion {
+        start,
+        end: *column,
+        action,
+    });
+    Ok(())
+}
+
+fn toolbar_only(layout: &Layout) -> Layout {
     Layout {
         toolbar_row: layout.toolbar_row,
-        run_start: layout.run_start,
-        run_end: layout.run_end,
-        build_start: layout.build_start,
-        build_end: layout.build_end,
-        test_start: layout.test_start,
-        test_end: layout.test_end,
+        toolbar_regions: layout.toolbar_regions.clone(),
         ..Layout::default()
     }
 }
 
-fn copy_toolbar(target: &mut Layout, toolbar: Layout) {
+fn copy_toolbar(target: &mut Layout, toolbar: &Layout) {
     target.toolbar_row = toolbar.toolbar_row;
-    target.run_start = toolbar.run_start;
-    target.run_end = toolbar.run_end;
-    target.build_start = toolbar.build_start;
-    target.build_end = toolbar.build_end;
-    target.test_start = toolbar.test_start;
-    target.test_end = toolbar.test_end;
-}
-
-fn toolbar_label(full: &str, short: &str, compact: bool, tiny: bool) -> String {
-    if tiny {
-        short.to_string()
-    } else if compact {
-        format!("[{short}]")
-    } else {
-        format!("[ {full} ]")
-    }
+    target.toolbar_regions.clone_from(&toolbar.toolbar_regions);
 }
 
 fn draw_toolbar_button(
@@ -885,7 +1058,7 @@ fn draw_toolbar_button(
     if color {
         queue!(
             output,
-            SetForegroundColor(Color::Black),
+            SetForegroundColor(theme::ON_ACCENT),
             SetBackgroundColor(background),
             SetAttribute(Attribute::Bold),
             Print(label),
@@ -997,9 +1170,14 @@ mod tests {
     }
 
     #[test]
-    fn toolbar_labels_collapse_for_narrow_terminals() {
-        assert_eq!(toolbar_label("Run", "R", false, false), "[ Run ]");
-        assert_eq!(toolbar_label("Run", "R", true, false), "[R]");
-        assert_eq!(toolbar_label("Run", "R", true, true), "R");
+    fn run_options_open_as_a_passive_menu() {
+        let mut menu = None;
+        refresh_command_menu("/run ", 5, &mut menu);
+        let menu = menu.expect("run options should open");
+        assert!(menu.dimmed);
+        assert!(menu
+            .candidates
+            .iter()
+            .any(|candidate| candidate.value == "clipboard"));
     }
 }

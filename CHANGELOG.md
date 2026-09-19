@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Simplified clipboard execution to `/run clipboard` and added the explicit
+  `/run interactive` mode while retaining bare `/run` as the default.
+- Made command options and file candidates appear passively when they become
+  relevant, including the new choices immediately after `/run`.
+- Expanded the fixed mouse bar with separate interactive/clipboard run actions
+  and clickable saved-case numbers plus an all-cases action.
+- Replaced the multicolor interface with a restrained slate-and-blue palette;
+  green, amber, and red are now reserved for semantic status messages.
+
 - Refined the welcome panel, prompt, grouped help, session status, result
   summaries, source picker, confirmation dialogs, and completion menus into a
   consistent responsive terminal UI.
@@ -20,6 +29,11 @@ All notable changes to this project are documented here. The format follows
 - Kept the mouse action bar outside the prompt redraw region so typing no
   longer causes the fixed buttons to flicker; it now repaints only when the
   terminal is resized or scrolled.
+
+### Fixed
+
+- Fixed saved-case discovery for relative sources in the current directory
+  (`run-cli a.cpp` now correctly finds `a.in1`, `a.in2`, and so on).
 
 ## [0.2.0] - 2026-09-19
 

@@ -1,5 +1,6 @@
 use crate::config::ColorPolicy;
 use crate::model::{BuildMode, RunReport, SourceSpec};
+use crate::theme;
 use std::io::{self, IsTerminal};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -33,8 +34,12 @@ impl Ui {
             return;
         }
         let detail = detail.as_ref();
-        let color = if self.color { "\x1b[36;1m" } else { "" };
-        let reset = if self.color { "\x1b[0m" } else { "" };
+        let color = if self.color {
+            theme::ANSI_PRIMARY_BOLD
+        } else {
+            ""
+        };
+        let reset = if self.color { theme::ANSI_RESET } else { "" };
         let width = terminal_width().min(88);
         let label = if detail.is_empty() {
             format!("━━ {title} ")
@@ -52,7 +57,12 @@ impl Ui {
 
     pub fn success(&self, message: impl AsRef<str>) {
         if self.color {
-            eprintln!("  \x1b[32m✓ {}\x1b[0m", message.as_ref());
+            eprintln!(
+                "  {}✓ {}{}",
+                theme::ANSI_SUCCESS,
+                message.as_ref(),
+                theme::ANSI_RESET
+            );
         } else {
             eprintln!("  ✓ {}", message.as_ref());
         }
@@ -60,7 +70,12 @@ impl Ui {
 
     pub fn warning(&self, message: impl AsRef<str>) {
         if self.color {
-            eprintln!("  \x1b[33m! {}\x1b[0m", message.as_ref());
+            eprintln!(
+                "  {}! {}{}",
+                theme::ANSI_WARNING,
+                message.as_ref(),
+                theme::ANSI_RESET
+            );
         } else {
             eprintln!("  ! {}", message.as_ref());
         }
@@ -68,7 +83,12 @@ impl Ui {
 
     pub fn error(&self, message: impl AsRef<str>) {
         if self.color {
-            eprintln!("\x1b[31;1m✗ Error\x1b[0m  {}", message.as_ref());
+            eprintln!(
+                "{}✗ Error{}  {}",
+                theme::ANSI_DANGER_BOLD,
+                theme::ANSI_RESET,
+                message.as_ref()
+            );
         } else {
             eprintln!("✗ Error  {}", message.as_ref());
         }
@@ -153,7 +173,11 @@ impl Ui {
 fn print_welcome_top(width: usize, color: bool) {
     let (start, title, fill, end) = welcome_top_parts(width);
     if color {
-        eprintln!("{start}\x1b[36;1m{title}\x1b[0m{fill}{end}");
+        eprintln!(
+            "{start}{}{title}{}{fill}{end}",
+            theme::ANSI_PRIMARY_BOLD,
+            theme::ANSI_RESET
+        );
     } else {
         eprintln!("{start}{title}{fill}{end}");
     }
