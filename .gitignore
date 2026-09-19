@@ -1,0 +1,10 @@
+/target/
+/.rn-build/
+.*.run-cli.*.tmp
+a.cpp
+a.go
+a.in1
+a.ky
+a.kt
+a.py
+run.sh

@@ -1,0 +1,24 @@
+[toolchains]
+cxx = "g++"
+cc = "gcc"
+python = "python3"
+javac = "javac"
+java = "java"
+rustc = "rustc"
+go = "go"
+kotlinc = "kotlinc"
+
+[flags]
+cpp = ["-std=c++17", "-Wall", "-Wshadow", "-Wno-unused-result", "-DLOCAL"]
+c = ["-std=c17", "-Wall", "-Wextra", "-Wshadow", "-Wno-unused-result"]
+
+[defaults]
+mode = "standard"
+# timeout = 2.0
+stress_limit = 1000
+stress_timeout = 2.0
+
+[ui]
+color = "auto"
+mouse = false
+

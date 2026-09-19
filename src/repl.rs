@@ -1,0 +1,383 @@
+use crate::cases;
+use crate::cli::Cli;
+use crate::commands::{self, GlobalOptions};
+use crate::config::Config;
+use crate::error::{AppError, AppResult};
+use crate::model::{BuildMode, SourceSpec};
+use crate::source::{resolve_source, scan_sources};
+use crate::suggest::RunCompleter;
+use crate::terminal;
+use crate::ui::Ui;
+use clap::Parser;
+use reedline::{
+    default_emacs_keybindings, ColumnarMenu, DefaultPrompt, DefaultPromptSegment, EditCommand,
+    Emacs, FileBackedHistory, KeyCode, KeyModifiers, MenuBuilder, Reedline, ReedlineEvent,
+    ReedlineMenu, Signal,
+};
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> {
+    let (config, ui) = commands::configured(Some(&source.path), base_globals)?;
+    let mut session = Session {
+        source,
+        mode: config.default_mode,
+        mouse: config.mouse,
+        config,
+        ui,
+        base_globals,
+    };
+    session
+        .ui
+        .welcome(&session.source, session.mode, session.mouse);
+
+    let history_path = session.config.state_dir.join("history.txt");
+    let history = if let Err(error) = fs::create_dir_all(&session.config.state_dir) {
+        session
+            .ui
+            .warning(format!("Command history will not be persisted: {error}"));
+        FileBackedHistory::new(1000)
+            .map_err(|error| AppError::new(format!("cannot initialize command history: {error}")))?
+    } else {
+        match FileBackedHistory::with_file(1000, history_path) {
+            Ok(history) => history,
+            Err(error) => {
+                session
+                    .ui
+                    .warning(format!("Command history will not be persisted: {error}"));
+                FileBackedHistory::new(1000).map_err(|error| {
+                    AppError::new(format!("cannot initialize command history: {error}"))
+                })?
+            }
+        }
+    };
+    let completion_menu = ColumnarMenu::default()
+        .with_name("completion_menu")
+        .with_columns(1)
+        .with_column_padding(2);
+    let mut keybindings = default_emacs_keybindings();
+    keybindings.add_binding(
+        KeyModifiers::NONE,
+        KeyCode::Tab,
+        ReedlineEvent::UntilFound(vec![
+            ReedlineEvent::Menu("completion_menu".to_string()),
+            ReedlineEvent::MenuNext,
+        ]),
+    );
+    keybindings.add_binding(
+        KeyModifiers::ALT,
+        KeyCode::Enter,
+        ReedlineEvent::Edit(vec![EditCommand::InsertNewline]),
+    );
+    let mut editor = Reedline::create()
+        .with_history(Box::new(history))
+        .with_completer(Box::<RunCompleter>::default())
+        .with_menu(ReedlineMenu::EngineCompleter(Box::new(completion_menu)))
+        .with_edit_mode(Box::new(Emacs::new(keybindings)));
+
+    loop {
+        let prompt = DefaultPrompt::new(
+            DefaultPromptSegment::Basic(format!(
+                "run-cli:{} [{}] ",
+                session
+                    .source
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("source"),
+                session.mode
+            )),
+            DefaultPromptSegment::Empty,
+        );
+        match editor
+            .read_line(&prompt)
+            .map_err(|error| AppError::new(format!("terminal input failed: {error}")))?
+        {
+            Signal::Success(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                match session.handle(line) {
+                    Ok(SessionAction::Continue) => {}
+                    Ok(SessionAction::Exit) => return Ok(0),
+                    Err(error) => session.ui.error(error.message),
+                }
+            }
+            Signal::CtrlC => {
+                eprintln!("^C");
+            }
+            Signal::CtrlD => return Ok(0),
+        }
+    }
+}
+
+struct Session {
+    source: SourceSpec,
+    mode: BuildMode,
+    mouse: bool,
+    config: Config,
+    ui: Ui,
+    base_globals: GlobalOptions,
+}
+
+enum SessionAction {
+    Continue,
+    Exit,
+}
+
+impl Session {
+    fn handle(&mut self, line: &str) -> AppResult<SessionAction> {
+        if !line.starts_with('/') {
+            return Err(AppError::usage(
+                "commands start with '/'; type /help to see available commands",
+            ));
+        }
+        let tokens = shell_words::split(line)
+            .map_err(|error| AppError::usage(format!("cannot parse command: {error}")))?;
+        let command = tokens.first().map(String::as_str).unwrap_or_default();
+        match command {
+            "/quit" | "/exit" => Ok(SessionAction::Exit),
+            "/help" => {
+                print_help();
+                Ok(SessionAction::Continue)
+            }
+            "/status" => {
+                let case_count = cases::list(&self.source)?.len();
+                println!("Source     {}", self.source.path.display());
+                println!("Language   {}", self.source.language);
+                println!("Mode       {}", self.mode);
+                println!("Cases      {case_count}");
+                println!("Mouse      {}", if self.mouse { "on" } else { "off" });
+                println!("Cache      {}", self.config.cache_dir.display());
+                Ok(SessionAction::Continue)
+            }
+            "/mode" => {
+                match tokens.get(1).map(String::as_str) {
+                    Some("standard") => self.mode = BuildMode::Standard,
+                    Some("debug") => self.mode = BuildMode::Debug,
+                    _ => return Err(AppError::usage("usage: /mode standard|debug")),
+                }
+                self.ui.success(format!("Build mode: {}", self.mode));
+                Ok(SessionAction::Continue)
+            }
+            "/mouse" => {
+                match tokens.get(1).map(String::as_str) {
+                    Some("on") => self.mouse = true,
+                    Some("off") => self.mouse = false,
+                    _ => return Err(AppError::usage("usage: /mouse on|off")),
+                }
+                self.ui.success(format!(
+                    "Mouse controls: {}",
+                    if self.mouse { "on" } else { "off" }
+                ));
+                Ok(SessionAction::Continue)
+            }
+            "/source" => {
+                let path = if let Some(path) = tokens.get(1) {
+                    Some(PathBuf::from(path))
+                } else {
+                    terminal::select_source(
+                        &scan_sources(Path::new(".")).map_err(AppError::new)?,
+                        self.mouse,
+                    )?
+                };
+                if let Some(path) = path {
+                    let source = resolve_source(path).map_err(AppError::usage)?;
+                    if !source.path.is_file() {
+                        return Err(AppError::new(format!(
+                            "source file '{}' does not exist",
+                            source.path.display()
+                        )));
+                    }
+                    let (config, ui) = commands::configured(Some(&source.path), self.base_globals)?;
+                    self.source = source;
+                    self.mode = config.default_mode;
+                    self.mouse = self.mouse || config.mouse;
+                    self.config = config;
+                    self.ui = ui;
+                    self.ui
+                        .success(format!("Active source: {}", self.source.path.display()));
+                }
+                Ok(SessionAction::Continue)
+            }
+            "/run" => {
+                let mut args = vec![OsString::from("run-cli"), OsString::from("exec")];
+                args.push(self.source.requested.as_os_str().to_owned());
+                args.extend(tokens.iter().skip(1).map(OsString::from));
+                self.execute(args)?;
+                Ok(SessionAction::Continue)
+            }
+            "/build" => {
+                let mut args = vec![OsString::from("run-cli"), OsString::from("build")];
+                args.push(self.source.requested.as_os_str().to_owned());
+                args.extend(tokens.iter().skip(1).map(OsString::from));
+                self.execute(args)?;
+                Ok(SessionAction::Continue)
+            }
+            "/test" => {
+                let selector = tokens
+                    .get(1)
+                    .ok_or_else(|| AppError::usage("usage: /test all|last|ID[,ID...]"))?;
+                let mut args = vec![
+                    OsString::from("run-cli"),
+                    OsString::from("test"),
+                    self.source.requested.as_os_str().to_owned(),
+                ];
+                match selector.as_str() {
+                    "all" => args.push(OsString::from("--all")),
+                    "last" => args.push(OsString::from("--last")),
+                    ids => {
+                        args.push(OsString::from("--id"));
+                        args.push(OsString::from(ids));
+                    }
+                }
+                self.execute(args)?;
+                Ok(SessionAction::Continue)
+            }
+            "/case" => {
+                self.handle_case(&tokens)?;
+                Ok(SessionAction::Continue)
+            }
+            "/diff" => {
+                if tokens.len() != 3 {
+                    return Err(AppError::usage("usage: /diff ID EXPECTED"));
+                }
+                self.execute(vec![
+                    OsString::from("run-cli"),
+                    OsString::from("diff"),
+                    self.source.requested.as_os_str().to_owned(),
+                    OsString::from(&tokens[1]),
+                    OsString::from(&tokens[2]),
+                ])?;
+                Ok(SessionAction::Continue)
+            }
+            "/stress" => {
+                if tokens.len() < 3 {
+                    return Err(AppError::usage(
+                        "usage: /stress BRUTE GENERATOR [--limit N] [--timeout SEC]",
+                    ));
+                }
+                let mut args = vec![
+                    OsString::from("run-cli"),
+                    OsString::from("stress"),
+                    self.source.requested.as_os_str().to_owned(),
+                    OsString::from("--brute"),
+                    OsString::from(&tokens[1]),
+                    OsString::from("--generator"),
+                    OsString::from(&tokens[2]),
+                ];
+                args.extend(tokens.iter().skip(3).map(OsString::from));
+                self.execute(args)?;
+                Ok(SessionAction::Continue)
+            }
+            "/doctor" => {
+                self.execute(vec![OsString::from("run-cli"), OsString::from("doctor")])?;
+                Ok(SessionAction::Continue)
+            }
+            _ => Err(AppError::usage(format!(
+                "unknown command '{command}'; type /help"
+            ))),
+        }
+    }
+
+    fn handle_case(&mut self, tokens: &[String]) -> AppResult<()> {
+        let action = tokens
+            .get(1)
+            .map(String::as_str)
+            .ok_or_else(|| AppError::usage("usage: /case list|show|copy|paste|delete|clear"))?;
+        let mut args = vec![
+            OsString::from("run-cli"),
+            OsString::from("case"),
+            OsString::from(action),
+            self.source.requested.as_os_str().to_owned(),
+        ];
+        match action {
+            "list" => {
+                if tokens.len() != 2 {
+                    return Err(AppError::usage("usage: /case list"));
+                }
+            }
+            "show" | "copy" => {
+                let id = tokens
+                    .get(2)
+                    .ok_or_else(|| AppError::usage(format!("usage: /case {action} ID")))?;
+                args.push(OsString::from(id));
+            }
+            "paste" => {
+                let target = tokens.get(2).map(String::as_str).unwrap_or("next");
+                if target == "next" {
+                    args.push(OsString::from("--next"));
+                } else {
+                    args.push(OsString::from("--id"));
+                    args.push(OsString::from(target));
+                }
+                if tokens.iter().any(|token| token == "--run") {
+                    args.push(OsString::from("--run"));
+                }
+            }
+            "delete" => {
+                let id = tokens
+                    .get(2)
+                    .ok_or_else(|| AppError::usage("usage: /case delete ID"))?;
+                if !terminal::confirm(&format!("Delete saved input #{id}?"), "Delete", self.mouse)?
+                {
+                    self.ui.info("Cancelled");
+                    return Ok(());
+                }
+                args.push(OsString::from(id));
+                args.push(OsString::from("--force"));
+            }
+            "clear" => {
+                if !terminal::confirm("Delete all saved inputs?", "Clear", self.mouse)? {
+                    self.ui.info("Cancelled");
+                    return Ok(());
+                }
+                args.push(OsString::from("--force"));
+            }
+            _ => return Err(AppError::usage(format!("unknown case action '{action}'"))),
+        }
+        self.execute(args)
+    }
+
+    fn execute(&self, args: Vec<OsString>) -> AppResult<()> {
+        let cli = Cli::try_parse_from(args).map_err(|error| AppError::usage(error.to_string()))?;
+        let command = cli
+            .command
+            .ok_or_else(|| AppError::usage("missing command"))?;
+        let globals = GlobalOptions {
+            color: self.base_globals.color,
+            mouse: self.mouse,
+            mode: Some(self.mode),
+        };
+        match commands::execute(command, globals) {
+            Ok(0) => Ok(()),
+            Ok(code) => {
+                self.ui
+                    .warning(format!("Command finished with exit status {code}"));
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn print_help() {
+    println!(
+        "\
+/run [--timeout SEC] [--save-input] [-i FILE] [-o FILE]
+/build [--debug]
+/test all|last|ID[,ID...]
+/case list|show ID|copy ID|paste [ID|next] [--run]|delete ID|clear
+/diff ID EXPECTED
+/stress BRUTE GENERATOR [--limit N] [--timeout SEC]
+/source [PATH]
+/mode standard|debug
+/mouse on|off
+/status
+/doctor
+/help
+/quit"
+    );
+}
