@@ -53,6 +53,7 @@ fn open_session(source: Option<std::path::PathBuf>, globals: GlobalOptions) -> A
             "interactive mode requires a terminal; use 'run-cli exec SOURCE' for scripts",
         ));
     }
+    let _screen = terminal::ScreenGuard::enter()?;
     let source = match source {
         Some(source) => source,
         None => {
@@ -84,7 +85,7 @@ fn normalize_exit(code: i32) -> i32 {
 fn install_panic_cleanup() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |information| {
-        terminal::restore_terminal();
+        terminal::restore_terminal_and_screen();
         previous(information);
     }));
 }
@@ -96,7 +97,7 @@ fn install_signal_cleanup() {
     if let Ok(mut signals) = Signals::new([SIGHUP, SIGQUIT, SIGTERM]) {
         std::thread::spawn(move || {
             if let Some(signal) = signals.forever().next() {
-                terminal::restore_terminal();
+                terminal::restore_terminal_and_screen();
                 std::process::exit(128 + signal);
             }
         });

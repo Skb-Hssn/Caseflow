@@ -148,12 +148,19 @@ fn repl_handles_resize_and_restores_terminal() {
     );
     let session = PtySession::spawn(command);
     session.wait_for("run-cli:main.py");
+    assert!(session.text().contains("\x1b[?1049h"));
     session.resize(8, 32);
     session.send(b"/status\r");
     session.wait_for("Language");
     session.resize(30, 120);
     session.send(b"/quit\r");
     session.wait_for("RESTORED=yes");
+    let output = session.text();
+    let leave_screen = output
+        .find("\x1b[?1049l")
+        .expect("alternate screen should be restored");
+    let restored = output.find("RESTORED=yes").unwrap();
+    assert!(leave_screen < restored);
     assert!(session.wait().success());
 }
 
@@ -278,7 +285,7 @@ fn clipboard_run_alias_saves_and_runs_the_next_case() {
     session.wait_for("run-cli:main.py");
     session.send(b"/run clipboard\r");
     session.wait_for("Saved input #1");
-    session.wait_for("\r\n5\r\n");
+    session.wait_for("Success (exit 0)");
     session.send(b"/quit\r");
     assert!(session.wait().success());
     assert_eq!(

@@ -32,6 +32,11 @@ Open a session for a source:
 run-cli A.cpp
 ```
 
+Interactive sessions use the terminal's alternate screen, like Vim. Exiting
+with `/quit` or Ctrl-D restores the previous terminal contents. Terminal state
+is also restored after handled signals, errors, and panics. One-shot commands
+continue to print in the normal terminal.
+
 Run `run-cli` without a source to open a fuzzy source picker: type any
 subsequence of the path to filter it, use arrows to move, and press Enter to
 select. Inside a session:

@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-20
+
 ### Changed
 
 - Simplified clipboard execution to `/run clipboard` and added the explicit
@@ -14,9 +16,10 @@ All notable changes to this project are documented here. The format follows
   relevant, including the new choices immediately after `/run`.
 - Expanded the fixed mouse bar with separate interactive/clipboard run actions
   and clickable saved-case numbers plus an all-cases action.
+- Moved interactive sessions into a Vim-style alternate screen that restores
+  the previous terminal contents on every exit path.
 - Replaced the multicolor interface with a restrained slate-and-blue palette;
   green, amber, and red are now reserved for semantic status messages.
-
 - Refined the welcome panel, prompt, grouped help, session status, result
   summaries, source picker, confirmation dialogs, and completion menus into a
   consistent responsive terminal UI.

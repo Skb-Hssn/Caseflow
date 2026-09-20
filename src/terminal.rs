@@ -5,13 +5,20 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEve
 use crossterm::style::{
     Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
 };
-use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
+use crossterm::terminal::{
+    self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, ScrollUp,
+};
 use crossterm::{execute, queue};
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 struct TerminalGuard;
+
+pub struct ScreenGuard;
+
+static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 // Normal tracking reports clicks, releases, and wheel events. Crossterm's
 // EnableMouseCapture also enables all-motion tracking (1003), which floods an
@@ -39,6 +46,26 @@ impl Drop for TerminalGuard {
     }
 }
 
+impl ScreenGuard {
+    pub fn enter() -> AppResult<Self> {
+        execute!(
+            io::stderr(),
+            EnterAlternateScreen,
+            Clear(ClearType::All),
+            MoveTo(0, 0),
+            Show
+        )?;
+        ALTERNATE_SCREEN_ACTIVE.store(true, Ordering::Release);
+        Ok(Self)
+    }
+}
+
+impl Drop for ScreenGuard {
+    fn drop(&mut self) {
+        restore_screen();
+    }
+}
+
 pub fn restore_terminal() {
     let mut stderr = io::stderr();
     let _ = execute!(
@@ -48,6 +75,17 @@ pub fn restore_terminal() {
         SetAttribute(Attribute::Reset)
     );
     let _ = terminal::disable_raw_mode();
+}
+
+pub fn restore_terminal_and_screen() {
+    restore_terminal();
+    restore_screen();
+}
+
+fn restore_screen() {
+    if ALTERNATE_SCREEN_ACTIVE.swap(false, Ordering::AcqRel) {
+        let _ = execute!(io::stderr(), LeaveAlternateScreen, Show);
+    }
 }
 
 pub fn enable_mouse_capture() -> AppResult<()> {

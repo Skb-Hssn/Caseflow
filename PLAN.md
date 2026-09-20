@@ -45,7 +45,7 @@ The prompt displays the active source, language, and build mode. Ctrl-C cancels 
 
 ### Buttons and mouse behavior
 
-- Source pickers, file-suggestion menus, and confirmation dialogs expose button-like actions such as `[ Select ]`, `[ Run ]`, `[ Delete ]`, and `[ Cancel ]` without turning the main interface into a full-screen dashboard.
+- Interactive sessions run in a Vim-style alternate screen and restore the previous terminal contents on exit. Source pickers, file-suggestion menus, confirmation dialogs, and the fixed action bar expose mouse controls without affecting one-shot command output.
 - Buttons are keyboard-first: Tab and arrow keys move focus, Enter or Space activates the focused action, Esc cancels, and visible shortcut letters provide direct access. Every mouse action has an equivalent keyboard action.
 - Mouse support is optional and disabled by default. Users can enable it through `/mouse on`, `--mouse`, or configuration; `/status` shows whether it is active.
 - Mouse reporting is enabled only while `run-cli` owns an interactive picker or dialog. It is disabled before a child program receives the terminal and restored only after control returns to the REPL.
@@ -98,6 +98,10 @@ tests cover concurrent saves, signal behavior, configuration precedence,
 clipboard failures, and unusual filenames. CI runs the suite with all supported
 toolchains, including a non-Snap Kotlin installation, and tagged releases build
 GNU and musl archives with SHA-256 checksums.
+
+Release-level changes include an appropriate Semantic Versioning bump without
+requiring a separate request. Each bump updates `Cargo.toml`, `Cargo.lock`, and
+`CHANGELOG.md`, then rebuilds and verifies the versioned release archive.
 
 - Unit-test source resolution, extensionless C++, config precedence, duration parsing, case ordering, command construction, Java package parsing, output-safety checks, path-token parsing, candidate filtering, and suggestion ranking.
 - Add isolated integration fixtures for all seven languages and both build modes. Use fake toolchains for deterministic failure tests and a CI image containing the real toolchains for end-to-end coverage.
