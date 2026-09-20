@@ -40,6 +40,11 @@ static CAPTURED_INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 const ENABLE_MOUSE_CLICKS: &str = "\x1b[?1007l\x1b[?1000h\x1b[?1006h";
 const ENABLE_NATIVE_SELECTION: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1007h";
 const DISABLE_MOUSE_TRACKING: &str = "\x1b[?1007l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+const LIVE_OUTPUT_BYTE_LIMIT: usize = 16 * 1024;
+const FINAL_OUTPUT_LIMIT: usize = 8 * 1024;
+const OUTPUT_SUPPRESSED_NOTICE: &[u8] =
+    b"\n  ! Output limit reached; further live output is suppressed. Press Ctrl-C to stop.\n";
+const FINAL_OUTPUT_NOTICE: &[u8] = b"\n  ... final output ...\n";
 pub const WORKSPACE_HEADER_ROWS: u16 = 3;
 
 impl TerminalGuard {
@@ -200,7 +205,10 @@ pub struct CapturedOutput {
     pub input: Vec<u8>,
 }
 
-pub fn capture_output<T>(action: impl FnOnce() -> T) -> AppResult<(T, CapturedOutput)> {
+pub fn capture_output<T>(
+    mouse: bool,
+    action: impl FnOnce() -> T,
+) -> AppResult<(T, CapturedOutput)> {
     let _capture_state = CaptureStateGuard::enter(io::stderr().is_terminal());
     let mut pipe_fds = [0; 2];
     if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
@@ -232,7 +240,16 @@ pub fn capture_output<T>(action: impl FnOnce() -> T) -> AppResult<(T, CapturedOu
     };
     let redirect = OutputRedirect::install(pipe_fds[1], saved_stdout, saved_stderr)?;
     let reader_fd = pipe_fds[0];
-    let reader = thread::spawn(move || capture_and_forward(reader_fd, forward_fd));
+    let (_, height) = terminal::size().unwrap_or((80, 24));
+    let footer_rows = if mouse && height >= 4 { 2 } else { 1 };
+    let header_rows =
+        WORKSPACE_HEADER_ROWS.min(height.saturating_sub(footer_rows).saturating_sub(1));
+    let live_line_limit = height
+        .saturating_sub(footer_rows)
+        .saturating_sub(header_rows)
+        .saturating_sub(1)
+        .max(1) as usize;
+    let reader = thread::spawn(move || capture_and_forward(reader_fd, forward_fd, live_line_limit));
     let result = action();
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
@@ -332,21 +349,98 @@ fn duplicate_fd(fd: RawFd) -> AppResult<RawFd> {
     }
 }
 
-fn capture_and_forward(reader_fd: RawFd, forward_fd: RawFd) -> AppResult<Vec<u8>> {
+fn capture_and_forward(
+    reader_fd: RawFd,
+    forward_fd: RawFd,
+    live_line_limit: usize,
+) -> AppResult<Vec<u8>> {
     let mut reader = unsafe { std::fs::File::from_raw_fd(reader_fd) };
     let mut forward = unsafe { std::fs::File::from_raw_fd(forward_fd) };
     let mut captured = Vec::new();
+    let mut final_output = Vec::new();
+    let mut output_suppressed = false;
+    let mut live_lines = 0_usize;
     let mut chunk = [0_u8; 8192];
     loop {
         let count = std::io::Read::read(&mut reader, &mut chunk)?;
         if count == 0 {
             break;
         }
-        captured.extend_from_slice(&chunk[..count]);
-        forward.write_all(&chunk[..count])?;
+        let chunk = &chunk[..count];
+        if !output_suppressed {
+            let visible = live_output_prefix_len(
+                chunk,
+                LIVE_OUTPUT_BYTE_LIMIT.saturating_sub(captured.len()),
+                live_line_limit.saturating_sub(live_lines),
+            );
+            if visible > 0 {
+                captured.extend_from_slice(&chunk[..visible]);
+                forward.write_all(&chunk[..visible])?;
+                forward.flush()?;
+                live_lines += chunk[..visible]
+                    .iter()
+                    .filter(|byte| **byte == b'\n')
+                    .count();
+            }
+            if visible < chunk.len() {
+                output_suppressed = true;
+                captured.extend_from_slice(OUTPUT_SUPPRESSED_NOTICE);
+                forward.write_all(OUTPUT_SUPPRESSED_NOTICE)?;
+                forward.flush()?;
+                append_output_tail(&mut final_output, &chunk[visible..]);
+            }
+        } else {
+            append_output_tail(&mut final_output, chunk);
+        }
+    }
+    if output_suppressed && !final_output.is_empty() {
+        trim_partial_line(&mut final_output);
+        captured.extend_from_slice(FINAL_OUTPUT_NOTICE);
+        captured.extend_from_slice(&final_output);
+        forward.write_all(FINAL_OUTPUT_NOTICE)?;
+        forward.write_all(&final_output)?;
         forward.flush()?;
     }
     Ok(captured)
+}
+
+fn live_output_prefix_len(chunk: &[u8], byte_limit: usize, line_limit: usize) -> usize {
+    if byte_limit == 0 || line_limit == 0 {
+        return 0;
+    }
+    let maximum = chunk.len().min(byte_limit);
+    let mut lines = 0_usize;
+    for (index, byte) in chunk[..maximum].iter().enumerate() {
+        if *byte == b'\n' {
+            lines += 1;
+            if lines == line_limit {
+                return index + 1;
+            }
+        }
+    }
+    maximum
+}
+
+fn append_output_tail(tail: &mut Vec<u8>, chunk: &[u8]) {
+    if chunk.len() >= FINAL_OUTPUT_LIMIT {
+        tail.clear();
+        tail.extend_from_slice(&chunk[chunk.len() - FINAL_OUTPUT_LIMIT..]);
+        return;
+    }
+    let overflow = tail
+        .len()
+        .saturating_add(chunk.len())
+        .saturating_sub(FINAL_OUTPUT_LIMIT);
+    if overflow > 0 {
+        tail.drain(..overflow);
+    }
+    tail.extend_from_slice(chunk);
+}
+
+fn trim_partial_line(output: &mut Vec<u8>) {
+    if let Some(newline) = output.iter().position(|byte| *byte == b'\n') {
+        output.drain(..=newline);
+    }
 }
 
 pub fn select_source(sources: &[PathBuf], mouse: bool, color: bool) -> AppResult<Option<PathBuf>> {
@@ -937,5 +1031,12 @@ mod tests {
     #[test]
     fn selected_rows_can_fill_the_available_width() {
         assert_eq!(pad_width("λ", 3), "λ  ");
+    }
+
+    #[test]
+    fn live_output_is_limited_by_visible_lines_and_bytes() {
+        assert_eq!(live_output_prefix_len(b"one\ntwo\nthree\n", 100, 2), 8);
+        assert_eq!(live_output_prefix_len(b"abcdef", 3, 10), 3);
+        assert_eq!(live_output_prefix_len(b"one\n", 100, 0), 0);
     }
 }

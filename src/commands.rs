@@ -342,38 +342,17 @@ pub fn run_saved_cases(
     let mut status = 0;
     for saved in selected {
         show_saved_case(&saved.path, ui)?;
-        let captured_output = ui
-            .interactive()
-            .then(|| temporary_path(config, "case-output"))
-            .transpose()?;
-        let output = captured_output
-            .as_ref()
-            .map(|path| OutputTarget::File(path.clone()))
-            .unwrap_or(OutputTarget::Inherit);
-        let result = process::run(
+        let report = process::run(
             &RunRequest {
                 command: product.command.clone(),
                 input: Some(saved.path),
-                output,
+                output: OutputTarget::Inherit,
                 timeout: config.timeout,
                 capture_input: None,
                 show_report: false,
             },
             ui,
-        );
-        let report = match result {
-            Ok(report) => report,
-            Err(error) => {
-                if let Some(path) = captured_output {
-                    let _ = fs::remove_file(path);
-                }
-                return Err(error);
-            }
-        };
-        if let Some(path) = captured_output {
-            show_captured_output(&path)?;
-            let _ = fs::remove_file(path);
-        }
+        )?;
         ui.case_report(&report);
         if report.exit_code != 0 {
             status = report.exit_code;
@@ -394,15 +373,6 @@ fn show_saved_case(path: &Path, ui: &Ui) -> AppResult<()> {
         eprintln!();
     }
     ui.section_title("Output");
-    Ok(())
-}
-
-fn show_captured_output(path: &Path) -> AppResult<()> {
-    let contents = fs::read(path)?;
-    io::stderr().write_all(&contents)?;
-    if !contents.is_empty() && contents.last() != Some(&b'\n') {
-        eprintln!();
-    }
     Ok(())
 }
 
@@ -620,7 +590,11 @@ pub fn run_stress(request: StressRequest, config: &Config, ui: &Ui) -> AppResult
             request.timeout.as_secs_f64()
         ),
     );
+    let interrupt = process::InterruptScope::install();
     for case_number in 1..=request.limit {
+        if interrupt.requested() {
+            return stop_stress(&directory, ui, case_number, "between cases");
+        }
         let generator_report = process::run(
             &RunRequest {
                 command: generator.command.clone().arg(case_number.to_string()),
@@ -632,6 +606,9 @@ pub fn run_stress(request: StressRequest, config: &Config, ui: &Ui) -> AppResult
             },
             ui,
         )?;
+        if generator_report.interrupted || interrupt.requested() {
+            return stop_stress(&directory, ui, case_number, "generator");
+        }
         if !generator_report.success() {
             let _ = fs::remove_dir_all(&directory);
             return Err(AppError::with_code(
@@ -653,6 +630,9 @@ pub fn run_stress(request: StressRequest, config: &Config, ui: &Ui) -> AppResult
             },
             ui,
         )?;
+        if actual_report.interrupted || interrupt.requested() {
+            return stop_stress(&directory, ui, case_number, "program");
+        }
         let expected_report = process::run(
             &RunRequest {
                 command: brute.command.clone(),
@@ -664,6 +644,9 @@ pub fn run_stress(request: StressRequest, config: &Config, ui: &Ui) -> AppResult
             },
             ui,
         )?;
+        if expected_report.interrupted || interrupt.requested() {
+            return stop_stress(&directory, ui, case_number, "brute");
+        }
         let same = actual_report.success()
             && expected_report.success()
             && fs::read(&actual)? == fs::read(&expected)?;
@@ -688,6 +671,14 @@ pub fn run_stress(request: StressRequest, config: &Config, ui: &Ui) -> AppResult
     let _ = fs::remove_dir_all(directory);
     ui.success(format!("Passed all {} stress case(s)", request.limit));
     Ok(0)
+}
+
+fn stop_stress(directory: &Path, ui: &Ui, case_number: u64, stage: &str) -> AppResult<i32> {
+    let _ = fs::remove_dir_all(directory);
+    ui.warning(format!(
+        "Stress testing stopped during {stage} on case {case_number}"
+    ));
+    Ok(130)
 }
 
 fn execute_doctor(globals: GlobalOptions) -> AppResult<i32> {

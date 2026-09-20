@@ -4,16 +4,22 @@ use crate::terminal;
 use crate::ui::Ui;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
+use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 static ACTIVE_PROCESS_GROUP: AtomicI32 = AtomicI32::new(0);
+static INTERRUPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static INTERRUPT_SCOPE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 extern "C" fn forward_signal(signal: libc::c_int) {
+    if signal == libc::SIGINT {
+        INTERRUPT_REQUESTED.store(true, Ordering::Relaxed);
+    }
     let process_group = ACTIVE_PROCESS_GROUP.load(Ordering::Relaxed);
     if process_group > 0 {
         unsafe {
@@ -29,7 +35,15 @@ struct SignalGuard {
 
 impl SignalGuard {
     fn install(process_group: i32) -> Self {
+        if !INTERRUPT_SCOPE_ACTIVE.load(Ordering::SeqCst) {
+            INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
+        }
         ACTIVE_PROCESS_GROUP.store(process_group, Ordering::SeqCst);
+        if INTERRUPT_REQUESTED.load(Ordering::SeqCst) {
+            unsafe {
+                libc::kill(-process_group, libc::SIGINT);
+            }
+        }
         unsafe {
             Self {
                 old_int: libc::signal(libc::SIGINT, forward_signal as libc::sighandler_t),
@@ -42,9 +56,40 @@ impl SignalGuard {
 impl Drop for SignalGuard {
     fn drop(&mut self) {
         ACTIVE_PROCESS_GROUP.store(0, Ordering::SeqCst);
+        if !INTERRUPT_SCOPE_ACTIVE.load(Ordering::SeqCst) {
+            INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
+        }
         unsafe {
             libc::signal(libc::SIGINT, self.old_int);
             libc::signal(libc::SIGTERM, self.old_term);
+        }
+    }
+}
+
+pub struct InterruptScope {
+    old_int: libc::sighandler_t,
+}
+
+impl InterruptScope {
+    pub fn install() -> Self {
+        INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
+        INTERRUPT_SCOPE_ACTIVE.store(true, Ordering::SeqCst);
+        let old_int = unsafe { libc::signal(libc::SIGINT, forward_signal as libc::sighandler_t) };
+        Self { old_int }
+    }
+
+    pub fn requested(&self) -> bool {
+        INTERRUPT_REQUESTED.load(Ordering::SeqCst)
+    }
+}
+
+impl Drop for InterruptScope {
+    fn drop(&mut self) {
+        ACTIVE_PROCESS_GROUP.store(0, Ordering::SeqCst);
+        INTERRUPT_SCOPE_ACTIVE.store(false, Ordering::SeqCst);
+        INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
+        unsafe {
+            libc::signal(libc::SIGINT, self.old_int);
         }
     }
 }
@@ -113,9 +158,21 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
     }
 
     let mut atomic_output = None;
+    let mut output_pty_master = None;
     match &request.output {
         OutputTarget::Inherit => {
-            command.stdout(Stdio::inherit());
+            if terminal::output_capture_active() {
+                let (master, slave) = open_output_pty()?;
+                let stderr = slave.try_clone().map_err(|error| {
+                    AppError::new(format!("cannot duplicate output terminal: {error}"))
+                })?;
+                command.stdout(Stdio::from(slave));
+                command.stderr(Stdio::from(stderr));
+                output_pty_master = Some(master);
+            } else {
+                command.stdout(Stdio::inherit());
+                command.stderr(Stdio::inherit());
+            }
         }
         OutputTarget::File(path) => {
             let file = File::create(path).map_err(|error| {
@@ -125,14 +182,15 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
                 ))
             })?;
             command.stdout(Stdio::from(file));
+            command.stderr(Stdio::inherit());
         }
         OutputTarget::AtomicFile(path) => {
             let (temporary, file) = create_atomic_temp(path)?;
             command.stdout(Stdio::from(file));
+            command.stderr(Stdio::inherit());
             atomic_output = Some((temporary, path.clone()));
         }
     }
-    command.stderr(Stdio::inherit());
     let owns_terminal = request.input.is_none() && !proxy_input && io::stdin().is_terminal();
 
     unsafe {
@@ -166,13 +224,19 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
             )));
         }
     };
+    drop(command);
     let pid = child.id() as i32;
     let _signal_guard = SignalGuard::install(pid);
     let _foreground_guard = owns_terminal.then(|| ForegroundGuard::give_to(pid));
+    let output_reader =
+        output_pty_master.map(|master| std::thread::spawn(move || drain_pty(master)));
 
     let mut child_stdin = child.stdin.take();
     let started = Instant::now();
     let mut termination_started = None;
+    let mut interrupt_started = None;
+    let mut interrupt_term_sent = false;
+    let mut interrupt_kill_sent = false;
     let mut timed_out = false;
     let mut raw_status = 0;
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
@@ -217,6 +281,24 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
                 }
             }
         }
+        if INTERRUPT_REQUESTED.load(Ordering::Relaxed) && interrupt_started.is_none() {
+            interrupt_started = Some(Instant::now());
+        }
+        if let Some(interrupt) = interrupt_started {
+            let elapsed = interrupt.elapsed();
+            if !interrupt_term_sent && elapsed >= Duration::from_millis(350) {
+                unsafe {
+                    libc::kill(-pid, libc::SIGTERM);
+                }
+                interrupt_term_sent = true;
+            }
+            if !interrupt_kill_sent && elapsed >= Duration::from_secs(1) {
+                unsafe {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+                interrupt_kill_sent = true;
+            }
+        }
         if let Some(termination) = termination_started {
             if termination.elapsed() >= Duration::from_secs(1) {
                 unsafe {
@@ -227,18 +309,29 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
         }
     }
 
+    if let Some(reader) = output_reader {
+        reader
+            .join()
+            .map_err(|_| AppError::new("output reader thread panicked"))??;
+    }
     drop(child_stdin);
     drop(input_capture);
     if retain_interactive_input {
         terminal::record_interactive_input(&retained_input);
     }
-    let exit_code = if timed_out {
+    let interrupted = interrupt_started.is_some()
+        || INTERRUPT_REQUESTED.load(Ordering::SeqCst)
+        || (libc::WIFSIGNALED(raw_status) && libc::WTERMSIG(raw_status) == libc::SIGINT);
+    let exit_code = if interrupted {
+        130
+    } else if timed_out {
         124
     } else {
         decode_wait_status(raw_status)
     };
     let report = RunReport {
         exit_code,
+        interrupted,
         wall_time: started.elapsed(),
         user_time: timeval_duration(usage.ru_utime),
         system_time: timeval_duration(usage.ru_stime),
@@ -264,6 +357,52 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
         ui.report(&report);
     }
     Ok(report)
+}
+
+fn open_output_pty() -> AppResult<(File, File)> {
+    let mut master = -1;
+    let mut slave = -1;
+    let (columns, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+    let size = libc::winsize {
+        ws_row: rows,
+        ws_col: columns,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let result = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            &size,
+        )
+    };
+    if result != 0 {
+        return Err(AppError::new(format!(
+            "cannot create output terminal: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    Ok(unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) })
+}
+
+fn drain_pty(mut master: File) -> AppResult<()> {
+    let mut output = io::stdout();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        match master.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(count) => {
+                output.write_all(&chunk[..count])?;
+                output.flush()?;
+            }
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
 }
 
 fn pump_stdin(child: &mut impl Write, capture: &mut impl Write) -> AppResult<bool> {

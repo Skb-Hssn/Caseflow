@@ -141,6 +141,7 @@ pub enum OutputTarget {
 #[derive(Debug, Clone)]
 pub struct RunReport {
     pub exit_code: i32,
+    pub interrupted: bool,
     pub wall_time: Duration,
     pub user_time: Duration,
     pub system_time: Duration,

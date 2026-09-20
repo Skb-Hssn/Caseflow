@@ -139,7 +139,7 @@ fn submit(
 ) -> AppResult<SessionAction> {
     editor.begin_command(command);
     terminal::begin_workspace_output(session.mouse)?;
-    let captured = terminal::capture_output(|| match session.handle(command) {
+    let captured = terminal::capture_output(session.mouse, || match session.handle(command) {
         Ok(action) => action,
         Err(error) => {
             session.ui.error(error.message);

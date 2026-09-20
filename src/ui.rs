@@ -229,6 +229,7 @@ mod tests {
     fn report_summary_is_compact_and_single_line() {
         let report = RunReport {
             exit_code: 0,
+            interrupted: false,
             wall_time: Duration::from_millis(10),
             user_time: Duration::from_millis(2),
             system_time: Duration::from_millis(1),

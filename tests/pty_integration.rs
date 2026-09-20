@@ -227,13 +227,145 @@ fn ctrl_c_interrupts_child_and_returns_to_repl() {
         directory.path(),
         "import time\nprint('child-started', flush=True)\ntime.sleep(30)\n",
     );
-    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("run-cli:main.py");
     session.send(b"/run\r");
     session.wait_for("child-started");
     session.send(b"\x03");
     session.wait_for("Failed (exit 130)");
     session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn ctrl_c_force_stops_a_signal_ignoring_loop() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        concat!(
+            "import signal\n",
+            "signal.signal(signal.SIGINT, signal.SIG_IGN)\n",
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n",
+            "print('stubborn-loop-started', flush=True)\n",
+            "while True:\n",
+            "    pass\n",
+        ),
+    );
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+    session.send(b"/run\r");
+    session.wait_for("stubborn-loop-started");
+    session.send(b"\x03");
+    session.wait_for("Failed (exit 130)");
+    session.wait_for("run-cli:main.py");
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn one_ctrl_c_stops_an_infinite_output_loop_without_killing_repl() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "while True:\n    print('flood-output', flush=True)\n",
+    );
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/run\r");
+    session.wait_for_sequence_since(
+        run_offset,
+        &[
+            "flood-output",
+            "Output limit reached; further live output is suppressed",
+        ],
+    );
+    let interrupt_offset = session.output_len();
+    session.send(b"\x03");
+    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.py"]);
+    session.send(b"/status\r");
+    session.wait_for_sequence_since(interrupt_offset, &["Language", "run-cli:main.py"]);
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn unflushed_cpp_output_is_visible_while_the_program_is_running() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("main.cpp");
+    fs::write(
+        &source,
+        "#include <cstdio>\nint main() { std::puts(\"unflushed-live-output\"); for (;;) {} }\n",
+    )
+    .unwrap();
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.cpp");
+    let run_offset = session.output_len();
+    session.send(b"/run\r");
+    session.wait_for_sequence_since(run_offset, &["unflushed-live-output"]);
+    let interrupt_offset = session.output_len();
+    session.send(b"\x03");
+    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.cpp"]);
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn saved_case_output_is_visible_before_the_program_exits() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "print('saved-case-live-output', flush=True)\nwhile True:\n    pass\n",
+    );
+    fs::write(directory.path().join("main.in1"), "1\n").unwrap();
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/test 1\r");
+    session.wait_for_sequence_since(
+        run_offset,
+        &["File", "Input", "Output", "saved-case-live-output"],
+    );
+    let interrupt_offset = session.output_len();
+    session.send(b"\x03");
+    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.py"]);
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn ctrl_c_stops_stress_testing_without_saving_a_false_mismatch() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "from pathlib import Path\nPath('candidate-ready').write_text('ready')\nwhile True:\n    pass\n",
+    );
+    fs::write(directory.path().join("brute.py"), "print(int(input()))\n").unwrap();
+    fs::write(
+        directory.path().join("generator.py"),
+        "import sys\nprint(sys.argv[1])\n",
+    )
+    .unwrap();
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/stress brute.py generator.py --runs 100 --timeout 60\r");
+    let ready = directory.path().join("candidate-ready");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(ready.exists(), "candidate did not start during stress test");
+    session.send(b"\x03");
+    session.wait_for_sequence_since(
+        run_offset,
+        &[
+            "Stress testing stopped during program on case 1",
+            "run-cli:main.py",
+        ],
+    );
+    assert!(!directory.path().join("main.in1").exists());
+    session.send(b"/exit\r");
     assert!(session.wait().success());
 }
 

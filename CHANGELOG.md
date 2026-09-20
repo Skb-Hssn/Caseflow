@@ -6,6 +6,54 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-09-20
+
+### Added
+
+- Made Ctrl-C stop the complete stress-testing session during the generator,
+  candidate, brute, or between cases, returning status 130 without running the
+  remaining stages or saving an interrupted input as a mismatch.
+
+## [0.5.8] - 2026-09-20
+
+### Fixed
+
+- Streamed saved-case and numbered Test-button output directly beneath the
+  `Output` label while the program is running instead of hiding it in a
+  temporary file until execution finished.
+
+## [0.5.7] - 2026-09-20
+
+### Fixed
+
+- Limited each live-output burst to the visible workspace height, allowing
+  terminals to paint tight print loops immediately in mouse mode instead of
+  appearing blank while processing thousands of queued scroll operations.
+
+## [0.5.6] - 2026-09-20
+
+### Fixed
+
+- Routed inherited REPL output through a pseudo-terminal so buffered C, C++,
+  Python, and similar programs display each completed line while still
+  running, without giving up retained output or runaway-output protection.
+
+## [0.5.5] - 2026-09-20
+
+### Fixed
+
+- Bounded live REPL output from runaway print loops so the terminal remains
+  responsive, the first Ctrl-C returns to the prompt, and run-cli retains the
+  final execution status instead of flushing an unbounded output backlog.
+
+## [0.5.4] - 2026-09-20
+
+### Fixed
+
+- Made Ctrl-C reliably stop non-terminating executions by escalating from
+  SIGINT to SIGTERM and finally SIGKILL for the complete child process group,
+  while reporting the operation as interrupted with exit status 130.
+
 ## [0.5.3] - 2026-09-20
 
 ### Fixed

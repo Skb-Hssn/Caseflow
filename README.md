@@ -42,6 +42,15 @@ command line stay fixed at the bottom. Each submitted command starts a distinct
 block in the middle viewport, and older blocks are dimmed. Scroll the retained
 output with the mouse wheel without moving the surrounding UI. Interactive
 stdin is retained in a labeled `Input` block after the program exits.
+Ctrl-C stops the active execution and returns to the prompt. If the program
+ignores the interrupt, run-cli escalates to termination and then a forced stop
+instead of waiting forever.
+
+To keep runaway print loops responsive, the REPL streams a bounded output
+prefix, suppresses the middle, and retains a small final tail containing the
+execution status. One-shot commands and explicit `--output` files are not
+truncated. Inherited REPL output uses a pseudo-terminal, so line-buffered C,
+C++, Python, and similar programs display completed lines while still running.
 
 Run `run-cli` without a source to open a fuzzy source picker: type any
 subsequence of the path to filter it, use arrows to move, and press Enter to
@@ -223,6 +232,10 @@ The generator receives the 1-based case number as its first argument and writes 
 3. Compares stdout byte for byte.
 4. Saves the first mismatch or abnormal-exit input as the next `.in<ID>` case.
 5. Prints a unified diff and exits with status 1.
+
+Press Ctrl-C at any time to stop the complete stress session. run-cli cancels
+the active generator, candidate, or brute process, skips all remaining cases,
+and does not save the interrupted input as a mismatch.
 
 Defaults are 1,000 cases and two seconds for each process.
 

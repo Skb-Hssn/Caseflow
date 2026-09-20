@@ -3,6 +3,8 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn binary() -> &'static str {
@@ -177,6 +179,69 @@ fn canonical_and_legacy_stress_syntax_both_work() {
         "legacy stress failed: {}",
         String::from_utf8_lossy(&legacy.stderr)
     );
+}
+
+#[test]
+fn ctrl_c_stops_generator_and_brute_stages_without_saving_cases() {
+    for interrupted_stage in ["generator", "brute"] {
+        let directory = TempDir::new().unwrap();
+        let source = directory.path().join("main.py");
+        let brute = directory.path().join("brute.py");
+        let generator = directory.path().join("generator.py");
+        let ready = directory.path().join(format!("{interrupted_stage}-ready"));
+        fs::write(&source, "print(int(input()))\n").unwrap();
+        fs::write(
+            &brute,
+            if interrupted_stage == "brute" {
+                "from pathlib import Path\nPath('brute-ready').write_text('ready')\nwhile True:\n    pass\n"
+            } else {
+                "print(int(input()))\n"
+            },
+        )
+        .unwrap();
+        fs::write(
+            &generator,
+            if interrupted_stage == "generator" {
+                "from pathlib import Path\nPath('generator-ready').write_text('ready')\nwhile True:\n    pass\n"
+            } else {
+                "print(1)\n"
+            },
+        )
+        .unwrap();
+
+        let child = command(&directory)
+            .current_dir(directory.path())
+            .arg("stress")
+            .arg(&source)
+            .arg(&brute)
+            .arg(&generator)
+            .arg("--runs")
+            .arg("100")
+            .arg("--timeout")
+            .arg("60")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !ready.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(ready.exists(), "{interrupted_stage} stage did not start");
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGINT);
+        }
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(130));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(&format!(
+                "Stress testing stopped during {interrupted_stage} on case 1"
+            )),
+            "unexpected stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!directory.path().join("main.in1").exists());
+    }
 }
 
 #[test]
