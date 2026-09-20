@@ -75,7 +75,10 @@ and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths
 containing spaces are quoted automatically. Completion lists are scrollable,
 resize-aware, and capped to the available terminal height.
 
-Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with separate `Run` and `Clipboard` buttons, `Build`, each saved case number, and `All`. Clipboard run saves the clipboard as the next case before executing it, so it can be rerun from its numbered button. Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit.
+Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with `Interactive` and `Clipboard` under `Run`, an on/off debug toggle, each saved case number under `Test`, and `All`. Clipboard run saves the clipboard as the next case before executing it, so it can be rerun from its numbered button. Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit. The build action remains available as `/build` rather than occupying the action bar.
+
+Clipboard and saved-case runs use a single `File` block with plain `Input` and
+`Output` sections, followed by a divider, `System status`, and a blank line.
 
 Use the action bar's `Select` button to release the mouse to the terminal, drag
 over any visible text, and copy with `Ctrl+Shift+C`; press `Esc` to restore
@@ -83,8 +86,8 @@ run-cli mouse controls. Terminals that support the standard override can also
 select immediately with Shift-drag.
 
 The toolbar uses compact labels on narrow terminals: `I` is interactive run,
-`C` is clipboard run, `B` is build, `S` is native text selection, and `A` tests
-all saved cases.
+`C` is clipboard run, `D` toggles debug mode, `S` is native text selection,
+and `A` tests all saved cases.
 
 ## One-shot commands
 

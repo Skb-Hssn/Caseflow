@@ -279,24 +279,69 @@ pub fn run_saved_cases(
     let product = build::build(source, build_mode, config, ui)?;
     let mut status = 0;
     for saved in selected {
-        show_input(&saved.path, ui)?;
-        ui.header("OUTPUT", "");
-        let report = process::run(
+        show_saved_case(&saved.path, ui)?;
+        let captured_output = ui
+            .interactive()
+            .then(|| temporary_path(config, "case-output"))
+            .transpose()?;
+        let output = captured_output
+            .as_ref()
+            .map(|path| OutputTarget::File(path.clone()))
+            .unwrap_or(OutputTarget::Inherit);
+        let result = process::run(
             &RunRequest {
                 command: product.command.clone(),
                 input: Some(saved.path),
-                output: OutputTarget::Inherit,
+                output,
                 timeout: config.timeout,
                 capture_input: None,
-                show_report: true,
+                show_report: false,
             },
             ui,
-        )?;
+        );
+        let report = match result {
+            Ok(report) => report,
+            Err(error) => {
+                if let Some(path) = captured_output {
+                    let _ = fs::remove_file(path);
+                }
+                return Err(error);
+            }
+        };
+        if let Some(path) = captured_output {
+            show_captured_output(&path)?;
+            let _ = fs::remove_file(path);
+        }
+        ui.case_report(&report);
         if report.exit_code != 0 {
             status = report.exit_code;
         }
     }
     Ok(status)
+}
+
+fn show_saved_case(path: &Path, ui: &Ui) -> AppResult<()> {
+    if !ui.interactive() {
+        return Ok(());
+    }
+    ui.header("File", path.display().to_string());
+    ui.section_title("Input");
+    let contents = fs::read(path)?;
+    io::stderr().write_all(&contents)?;
+    if !contents.is_empty() && contents.last() != Some(&b'\n') {
+        eprintln!();
+    }
+    ui.section_title("Output");
+    Ok(())
+}
+
+fn show_captured_output(path: &Path) -> AppResult<()> {
+    let contents = fs::read(path)?;
+    io::stderr().write_all(&contents)?;
+    if !contents.is_empty() && contents.last() != Some(&b'\n') {
+        eprintln!();
+    }
+    Ok(())
 }
 
 fn execute_case(args: CaseArgs, globals: GlobalOptions) -> AppResult<i32> {

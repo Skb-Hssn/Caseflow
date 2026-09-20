@@ -103,6 +103,30 @@ impl Ui {
         }
     }
 
+    pub fn section_title(&self, title: &str) {
+        if self.color {
+            eprintln!("{}{}{}", theme::ANSI_PRIMARY_BOLD, title, theme::ANSI_RESET);
+        } else {
+            eprintln!("{title}");
+        }
+    }
+
+    pub fn case_report(&self, report: &RunReport) {
+        if self.interactive {
+            let width = terminal_width().min(88);
+            if self.color {
+                eprintln!("\x1b[38;5;245;2m{}{}", "─".repeat(width), theme::ANSI_RESET);
+            } else {
+                eprintln!("{}", "─".repeat(width));
+            }
+            self.section_title("System status");
+        }
+        self.report(report);
+        if self.interactive {
+            eprintln!();
+        }
+    }
+
     pub fn report(&self, report: &RunReport) {
         let cpu_seconds = report.user_time.as_secs_f64() + report.system_time.as_secs_f64();
         let cpu = if report.wall_time.is_zero() {

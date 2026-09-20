@@ -28,7 +28,7 @@ pub enum EditorSignal {
 pub enum EditorAction {
     RunInteractive,
     RunClipboard,
-    Build,
+    ToggleDebug,
     SelectText,
     TestCase(u64),
     TestAll,
@@ -117,6 +117,12 @@ struct RenderOptions<'a> {
     context: &'a EditorContext,
     output_lines: &'a [String],
     scroll_offset: usize,
+}
+
+struct ToolbarOptions<'a> {
+    case_ids: &'a [u64],
+    debug: bool,
+    selection_mode: bool,
 }
 
 impl LineEditor {
@@ -707,8 +713,11 @@ fn render_workspace(
                 width,
                 toolbar_row,
                 options.color,
-                options.case_ids,
-                options.selection_mode,
+                ToolbarOptions {
+                    case_ids: options.case_ids,
+                    debug: options.context.mode == "debug",
+                    selection_mode: options.selection_mode,
+                },
                 &mut layout,
             )?;
             state.toolbar = Some(toolbar_only(&layout));
@@ -1101,8 +1110,7 @@ fn draw_toolbar(
     width: u16,
     row: u16,
     color: bool,
-    case_ids: &[u64],
-    selection_mode: bool,
+    options: ToolbarOptions<'_>,
     layout: &mut Layout,
 ) -> AppResult<()> {
     layout.toolbar_row = row;
@@ -1132,10 +1140,14 @@ fn draw_toolbar(
         )?;
         draw_toolbar_action(
             output,
-            "B",
-            EditorAction::Build,
+            "D",
+            EditorAction::ToggleDebug,
             color,
-            theme::SURFACE,
+            if options.debug {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
             &mut column,
             layout,
         )?;
@@ -1144,7 +1156,7 @@ fn draw_toolbar(
             "S",
             EditorAction::SelectText,
             color,
-            if selection_mode {
+            if options.selection_mode {
                 theme::PRIMARY
             } else {
                 theme::SURFACE
@@ -1156,7 +1168,7 @@ fn draw_toolbar(
         draw_test_actions(
             output,
             width,
-            case_ids,
+            options.case_ids,
             ToolbarDensity::Tiny,
             color,
             &mut column,
@@ -1182,12 +1194,17 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_text(output, " D", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[B]",
-            EditorAction::Build,
+            if options.debug { "[on]" } else { "[off]" },
+            EditorAction::ToggleDebug,
             color,
-            theme::SURFACE,
+            if options.debug {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
             &mut column,
             layout,
         )?;
@@ -1196,7 +1213,7 @@ fn draw_toolbar(
             "[S]",
             EditorAction::SelectText,
             color,
-            if selection_mode {
+            if options.selection_mode {
                 theme::PRIMARY
             } else {
                 theme::SURFACE
@@ -1208,24 +1225,24 @@ fn draw_toolbar(
         draw_test_actions(
             output,
             width,
-            case_ids,
+            options.case_ids,
             ToolbarDensity::Compact,
             color,
             &mut column,
             layout,
         )?;
     } else {
-        draw_toolbar_text(output, " ", color, &mut column)?;
+        draw_toolbar_text(output, "  Run ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[ Run ]",
+            "[ Interactive ]",
             EditorAction::RunInteractive,
             color,
             theme::PRIMARY,
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "  ", color, &mut column)?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
         draw_toolbar_action(
             output,
             "[ Clipboard ]",
@@ -1235,13 +1252,17 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "  ", color, &mut column)?;
+        draw_toolbar_text(output, "  Debug ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[ Build ]",
-            EditorAction::Build,
+            if options.debug { "[ On ]" } else { "[ Off ]" },
+            EditorAction::ToggleDebug,
             color,
-            theme::SURFACE,
+            if options.debug {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
             &mut column,
             layout,
         )?;
@@ -1251,7 +1272,7 @@ fn draw_toolbar(
             "[ Select ]",
             EditorAction::SelectText,
             color,
-            if selection_mode {
+            if options.selection_mode {
                 theme::PRIMARY
             } else {
                 theme::SURFACE
@@ -1259,11 +1280,11 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "   Test ", color, &mut column)?;
+        draw_toolbar_text(output, "  Test ", color, &mut column)?;
         draw_test_actions(
             output,
             width,
-            case_ids,
+            options.case_ids,
             ToolbarDensity::Full,
             color,
             &mut column,

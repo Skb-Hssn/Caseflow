@@ -73,7 +73,14 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                 let command = match action {
                     EditorAction::RunInteractive => "/run interactive".to_string(),
                     EditorAction::RunClipboard => "/run clipboard".to_string(),
-                    EditorAction::Build => "/build".to_string(),
+                    EditorAction::ToggleDebug => format!(
+                        "/mode {}",
+                        if session.mode == BuildMode::Debug {
+                            "standard"
+                        } else {
+                            "debug"
+                        }
+                    ),
                     EditorAction::SelectText => unreachable!("handled by the editor"),
                     EditorAction::TestCase(id) => format!("/test {id}"),
                     EditorAction::TestAll => "/test all".to_string(),

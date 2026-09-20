@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-20
+
+### Changed
+
+- Unified clipboard and saved-case presentation into a single `File` block
+  with `Input`, `Output`, a divider, `System status`, and trailing spacing.
+
+## [0.4.5] - 2026-09-20
+
+### Changed
+
+- Grouped `Interactive` and `Clipboard` beneath `Run`, matching the numbered
+  `Test` actions.
+- Replaced the toolbar's build action with an on/off debug-mode toggle; `/build`
+  remains available from the command line.
+
 ## [0.4.4] - 2026-09-20
 
 ### Changed
