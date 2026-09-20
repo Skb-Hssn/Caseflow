@@ -29,8 +29,9 @@ static CAPTURED_INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 // Normal tracking reports clicks, releases, and wheel events. Crossterm's
 // EnableMouseCapture also enables all-motion tracking (1003), which floods an
 // interactive editor with events whenever the pointer moves.
-const ENABLE_MOUSE_CLICKS: &str = "\x1b[?1000h\x1b[?1006h";
-const DISABLE_MOUSE_TRACKING: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+const ENABLE_MOUSE_CLICKS: &str = "\x1b[?1007l\x1b[?1000h\x1b[?1006h";
+const ENABLE_NATIVE_SELECTION: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1007h";
+const DISABLE_MOUSE_TRACKING: &str = "\x1b[?1007l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 pub const WORKSPACE_HEADER_ROWS: u16 = 3;
 
 impl TerminalGuard {
@@ -102,6 +103,11 @@ pub fn enable_mouse_capture() -> AppResult<()> {
 
 pub fn disable_mouse_capture() -> AppResult<()> {
     execute!(io::stderr(), Print(DISABLE_MOUSE_TRACKING))?;
+    Ok(())
+}
+
+pub fn enable_native_selection() -> AppResult<()> {
+    execute!(io::stderr(), Print(ENABLE_NATIVE_SELECTION))?;
     Ok(())
 }
 

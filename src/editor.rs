@@ -290,10 +290,34 @@ impl LineEditor {
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
                     if selection_mode {
-                        if key.code == KeyCode::Esc {
-                            selection_mode = false;
-                            render_state.toolbar_dirty = true;
-                            redraw = true;
+                        match key.code {
+                            KeyCode::Esc => {
+                                selection_mode = false;
+                                render_state.toolbar_dirty = true;
+                                redraw = true;
+                            }
+                            KeyCode::Up | KeyCode::PageUp => {
+                                let amount = if key.code == KeyCode::PageUp { 10 } else { 3 };
+                                self.scroll_offset = self
+                                    .scroll_offset
+                                    .saturating_add(amount)
+                                    .min(self.output_lines.len().saturating_sub(1));
+                                redraw = true;
+                            }
+                            KeyCode::Down | KeyCode::PageDown => {
+                                let amount = if key.code == KeyCode::PageDown { 10 } else { 3 };
+                                self.scroll_offset = self.scroll_offset.saturating_sub(amount);
+                                redraw = true;
+                            }
+                            KeyCode::Home => {
+                                self.scroll_offset = self.output_lines.len().saturating_sub(1);
+                                redraw = true;
+                            }
+                            KeyCode::End => {
+                                self.scroll_offset = 0;
+                                redraw = true;
+                            }
+                            _ => {}
                         }
                         continue;
                     }
@@ -338,7 +362,7 @@ impl LineEditor {
                             .flatten();
                         if let Some(action) = action {
                             if action == EditorAction::SelectText {
-                                terminal_state::disable_mouse_capture()?;
+                                terminal_state::enable_native_selection()?;
                                 mouse_capture = false;
                                 selection_mode = true;
                                 render_state.toolbar_dirty = true;
@@ -382,6 +406,20 @@ impl LineEditor {
                         activate_selection(menu.as_mut(), 1);
                         redraw = true;
                     }
+                    MouseEventKind::ScrollUp => {
+                        self.scroll_offset = self
+                            .scroll_offset
+                            .saturating_add(3)
+                            .min(self.output_lines.len().saturating_sub(1));
+                        redraw = true;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(3);
+                        redraw = true;
+                    }
+                    _ => {}
+                },
+                Event::Mouse(mouse_event) if selection_mode => match mouse_event.kind {
                     MouseEventKind::ScrollUp => {
                         self.scroll_offset = self
                             .scroll_offset
@@ -734,7 +772,7 @@ fn render_workspace(
     queue!(stderr, MoveTo(0, prompt_row), Clear(ClearType::CurrentLine))?;
     let prefix_width = if options.selection_mode {
         draw_selection_prompt(&mut stderr, options.color)?;
-        UnicodeWidthStr::width(" Select text · Ctrl-Shift-C copy · Esc return")
+        UnicodeWidthStr::width(" Select text · wheel/↑↓ scroll · Ctrl-Shift-C copy · Esc return")
     } else {
         draw_prompt(&mut stderr, prompt, options.color)?;
         queue!(stderr, Print(buffer), Clear(ClearType::UntilNewLine))?;
@@ -756,7 +794,7 @@ fn draw_selection_prompt(output: &mut impl Write, color: bool) -> AppResult<()> 
         Print(" Select text"),
         SetAttribute(Attribute::Reset),
         ResetColor,
-        Print(" · Ctrl-Shift-C copy · Esc return"),
+        Print(" · wheel/↑↓ scroll · Ctrl-Shift-C copy · Esc return"),
         Clear(ClearType::UntilNewLine)
     )?;
     Ok(())
@@ -1116,7 +1154,7 @@ fn draw_toolbar(
     layout.toolbar_row = row;
     queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
     layout.toolbar_regions.clear();
-    let compact = width < 60;
+    let compact = width < 80;
     let mut column = 0_u16;
 
     if width < 18 {
@@ -1135,6 +1173,16 @@ fn draw_toolbar(
             EditorAction::RunClipboard,
             color,
             theme::PRIMARY,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, "T", color, &mut column)?;
+        draw_test_actions(
+            output,
+            width.saturating_sub(2),
+            options.case_ids,
+            ToolbarDensity::Tiny,
+            color,
             &mut column,
             layout,
         )?;
@@ -1164,16 +1212,6 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "T", color, &mut column)?;
-        draw_test_actions(
-            output,
-            width,
-            options.case_ids,
-            ToolbarDensity::Tiny,
-            color,
-            &mut column,
-            layout,
-        )?;
     } else if compact {
         draw_toolbar_text(output, " R", color, &mut column)?;
         draw_toolbar_action(
@@ -1194,6 +1232,16 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_text(output, " T", color, &mut column)?;
+        draw_test_actions(
+            output,
+            width.saturating_sub(11),
+            options.case_ids,
+            ToolbarDensity::Compact,
+            color,
+            &mut column,
+            layout,
+        )?;
         draw_toolbar_text(output, " D", color, &mut column)?;
         draw_toolbar_action(
             output,
@@ -1208,6 +1256,7 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
         draw_toolbar_action(
             output,
             "[S]",
@@ -1221,21 +1270,11 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, " T", color, &mut column)?;
-        draw_test_actions(
-            output,
-            width,
-            options.case_ids,
-            ToolbarDensity::Compact,
-            color,
-            &mut column,
-            layout,
-        )?;
     } else {
-        draw_toolbar_text(output, "  Run ", color, &mut column)?;
+        draw_toolbar_text(output, " Run  ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[ Interactive ]",
+            "[Interactive]",
             EditorAction::RunInteractive,
             color,
             theme::PRIMARY,
@@ -1245,17 +1284,27 @@ fn draw_toolbar(
         draw_toolbar_text(output, " ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[ Clipboard ]",
+            "[Clipboard]",
             EditorAction::RunClipboard,
             color,
             theme::PRIMARY,
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "  Debug ", color, &mut column)?;
+        draw_toolbar_text(output, "   Test  ", color, &mut column)?;
+        draw_test_actions(
+            output,
+            width.saturating_sub(25),
+            options.case_ids,
+            ToolbarDensity::Full,
+            color,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, "   Debug ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            if options.debug { "[ On ]" } else { "[ Off ]" },
+            if options.debug { "[On]" } else { "[Off]" },
             EditorAction::ToggleDebug,
             color,
             if options.debug {
@@ -1266,10 +1315,10 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "  ", color, &mut column)?;
+        draw_toolbar_text(output, "   ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[ Select ]",
+            "[Select]",
             EditorAction::SelectText,
             color,
             if options.selection_mode {
@@ -1277,16 +1326,6 @@ fn draw_toolbar(
             } else {
                 theme::SURFACE
             },
-            &mut column,
-            layout,
-        )?;
-        draw_toolbar_text(output, "  Test ", color, &mut column)?;
-        draw_test_actions(
-            output,
-            width,
-            options.case_ids,
-            ToolbarDensity::Full,
-            color,
             &mut column,
             layout,
         )?;
@@ -1306,7 +1345,7 @@ fn draw_test_actions(
     let all_label = match density {
         ToolbarDensity::Tiny => "A",
         ToolbarDensity::Compact => "[A]",
-        ToolbarDensity::Full => "[ All ]",
+        ToolbarDensity::Full => "[All]",
     };
     let all_width = UnicodeWidthStr::width(all_label) as u16;
     let mut omitted = false;
@@ -1314,7 +1353,7 @@ fn draw_test_actions(
         let label = match density {
             ToolbarDensity::Tiny => id.to_string(),
             ToolbarDensity::Compact => format!("[{id}]"),
-            ToolbarDensity::Full => format!("[ {id} ]"),
+            ToolbarDensity::Full => format!("[{id}]"),
         };
         let needed = UnicodeWidthStr::width(label.as_str()) as u16 + 1;
         if column.saturating_add(needed).saturating_add(all_width) > width {

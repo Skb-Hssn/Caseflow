@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-09-20
+
+### Changed
+
+- Reordered the action bar as Run, Test, Debug, and Select, with tighter button
+  styling so more numbered cases fit at common terminal widths.
+
+### Fixed
+
+- Kept output scrolling available in native selection mode through wheel
+  reports, arrow keys, Page Up/Down, Home, and End.
+
 ## [0.4.6] - 2026-09-20
 
 ### Changed

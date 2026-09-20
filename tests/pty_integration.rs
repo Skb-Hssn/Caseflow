@@ -263,7 +263,7 @@ fn persistent_mouse_toolbar_runs_the_active_source() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('toolbar-run')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Interactive ]");
+    session.wait_for("[Interactive]");
     // The toolbar is fixed above the command row; this lands inside Interactive.
     session.send(b"\x1b[<0;10;23M");
     session.wait_for("toolbar-run");
@@ -277,7 +277,7 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Interactive ]");
+    session.wait_for("[Interactive]");
     assert!(
         !session.text().contains("\x1b[?1003h"),
         "mouse mode must not enable all-motion tracking"
@@ -287,11 +287,11 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     session.send(b"\x1b[<35;50;10M");
     thread::sleep(Duration::from_millis(100));
     assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
-    assert_eq!(session.text().matches("[ Interactive ]").count(), 1);
+    assert_eq!(session.text().matches("[Interactive]").count(), 1);
     session.send(b"/xyz");
     session.wait_for("/xyz");
     assert_eq!(
-        session.text().matches("[ Interactive ]").count(),
+        session.text().matches("[Interactive]").count(),
         1,
         "toolbar should remain static during prompt redraws"
     );
@@ -305,11 +305,11 @@ fn debug_toolbar_button_toggles_build_mode() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Off ]");
+    session.wait_for("[Off]");
     assert!(!session.text().contains("[ Build ]"));
-    session.send(b"\x1b[<0;45;23M");
+    session.send(b"\x1b[<0;56;23M");
     session.wait_for("Build mode: debug");
-    session.wait_for("[ On ]");
+    session.wait_for("[On]");
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
@@ -360,10 +360,10 @@ fn mouse_toolbar_runs_a_specific_numbered_case() {
     let source = source(directory.path(), "print(input().strip())\n");
     fs::write(directory.path().join("main.in7"), "case-seven\n").unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ 7 ]");
-    session.wait_for("[ All ]");
-    // The first numbered case begins at zero-based column 69 on the full bar.
-    session.send(b"\x1b[<0;71;23M");
+    session.wait_for("[7]");
+    session.wait_for("[All]");
+    // The first numbered case begins at zero-based column 40 on the full bar.
+    session.send(b"\x1b[<0;42;23M");
     session.wait_for("File ·");
     session.wait_for("Input");
     session.wait_for("Output");
@@ -379,11 +379,20 @@ fn select_button_releases_mouse_for_native_copying() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('selectable')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Select ]");
-    session.send(b"\x1b[<0;54;23M");
-    session.wait_for("Ctrl-Shift-C copy · Esc return");
+    session.wait_for("[Select]");
+    session.send(b"/help\r");
+    session.wait_for("KEYS");
+    session.wait_for("run-cli:main.py");
+    session.send(b"\x1b[<0;64;23M");
+    session.wait_for("wheel/↑↓ scroll");
+    assert!(session.text().contains("\x1b[?1007h"));
+    // Alternate-scroll mode translates the wheel to cursor keys while native
+    // terminal selection owns the mouse.
+    session.send(b"\x1b[A");
+    session.wait_for("↑ 3");
+    let prompt_count = session.text().matches("run-cli:main.py").count();
     session.send(b"\x1b");
-    session.wait_for_count("run-cli:main.py", 2);
+    session.wait_for_count("run-cli:main.py", prompt_count + 1);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
@@ -396,7 +405,7 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
         "for index in range(40):\n    print(f'line-{index:02}')\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Interactive ]");
+    session.wait_for("[Interactive]");
     session.send(b"/run\r");
     session.wait_for("Success (exit 0)");
     session.wait_for("run-cli:main.py");
@@ -408,7 +417,7 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     let before_len = before.len();
     let title = format!(" run-cli  v{}  ·  ", env!("CARGO_PKG_VERSION"));
     let header_count = before.matches(&title).count();
-    let toolbar_count = before.matches("[ Interactive ]").count();
+    let toolbar_count = before.matches("[Interactive]").count();
     for _ in 0..8 {
         session.send(b"\x1b[<64;50;10M");
     }
@@ -418,7 +427,7 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     assert!(scrolled_render.contains("line-10"));
     assert!(scrolled_render.contains('↑'));
     assert_eq!(after.matches(&title).count(), header_count);
-    assert_eq!(after.matches("[ Interactive ]").count(), toolbar_count);
+    assert_eq!(after.matches("[Interactive]").count(), toolbar_count);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }

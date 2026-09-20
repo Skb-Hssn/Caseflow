@@ -81,9 +81,10 @@ Clipboard and saved-case runs use a single `File` block with plain `Input` and
 `Output` sections, followed by a divider, `System status`, and a blank line.
 
 Use the action bar's `Select` button to release the mouse to the terminal, drag
-over any visible text, and copy with `Ctrl+Shift+C`; press `Esc` to restore
-run-cli mouse controls. Terminals that support the standard override can also
-select immediately with Shift-drag.
+over any visible text, and copy with `Ctrl+Shift+C`; the wheel, arrow keys, and
+Page Up/Down continue scrolling the output. Press `Esc` to restore run-cli
+mouse controls. Terminals that support the standard override can also select
+immediately with Shift-drag.
 
 The toolbar uses compact labels on narrow terminals: `I` is interactive run,
 `C` is clipboard run, `D` toggles debug mode, `S` is native text selection,
