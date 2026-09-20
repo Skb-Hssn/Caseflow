@@ -1,5 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::model::{OutputTarget, RunReport, RunRequest};
+use crate::terminal;
 use crate::ui::Ui;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
@@ -93,13 +94,19 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
     };
     let mut command = Command::new(&request.command.program);
     command.args(&request.command.args);
+    let retain_interactive_input = terminal::output_capture_active()
+        && request.input.is_none()
+        && request.capture_input.is_none()
+        && io::stdin().is_terminal();
+    let proxy_input = request.capture_input.is_some() || retain_interactive_input;
+    let mut retained_input = Vec::new();
 
     if let Some(input) = &request.input {
         let file = File::open(input).map_err(|error| {
             AppError::new(format!("cannot open input '{}': {error}", input.display()))
         })?;
         command.stdin(Stdio::from(file));
-    } else if request.capture_input.is_some() {
+    } else if proxy_input {
         command.stdin(Stdio::piped());
     } else {
         command.stdin(Stdio::inherit());
@@ -126,8 +133,7 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
         }
     }
     command.stderr(Stdio::inherit());
-    let owns_terminal =
-        request.input.is_none() && request.capture_input.is_none() && io::stdin().is_terminal();
+    let owns_terminal = request.input.is_none() && !proxy_input && io::stdin().is_terminal();
 
     unsafe {
         command.pre_exec(move || {
@@ -186,8 +192,15 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
             }
         }
 
-        if let (Some(stdin), Some(capture)) = (child_stdin.as_mut(), input_capture.as_mut()) {
-            if !pump_stdin(stdin, capture)? {
+        if let Some(stdin) = child_stdin.as_mut() {
+            let keep_open = if let Some(capture) = input_capture.as_mut() {
+                pump_stdin(stdin, capture)?
+            } else if retain_interactive_input {
+                pump_stdin(stdin, &mut retained_input)?
+            } else {
+                true
+            };
+            if !keep_open {
                 child_stdin = None;
                 input_capture = None;
             }
@@ -216,6 +229,9 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
 
     drop(child_stdin);
     drop(input_capture);
+    if retain_interactive_input {
+        terminal::record_interactive_input(&retained_input);
+    }
     let exit_code = if timed_out {
         124
     } else {

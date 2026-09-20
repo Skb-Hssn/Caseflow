@@ -13,6 +13,7 @@ use std::io::{self, IsTerminal, Write};
 use std::os::fd::{FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -23,6 +24,7 @@ pub struct ScreenGuard;
 static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static OUTPUT_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CAPTURED_STDERR_IS_TERMINAL: AtomicBool = AtomicBool::new(false);
+static CAPTURED_INPUT: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 // Normal tracking reports clicks, releases, and wheel events. Crossterm's
 // EnableMouseCapture also enables all-motion tracking (1003), which floods an
@@ -111,6 +113,18 @@ pub fn stderr_is_terminal() -> bool {
     }
 }
 
+pub fn output_capture_active() -> bool {
+    OUTPUT_CAPTURE_ACTIVE.load(Ordering::Acquire)
+}
+
+pub fn record_interactive_input(input: &[u8]) {
+    if output_capture_active() {
+        if let Ok(mut captured) = CAPTURED_INPUT.lock() {
+            captured.extend_from_slice(input);
+        }
+    }
+}
+
 pub fn begin_workspace_output(mouse: bool) -> AppResult<()> {
     let (_, height) = terminal::size().unwrap_or((80, 24));
     let footer_rows = if mouse && height >= 4 { 2 } else { 1 };
@@ -133,7 +147,12 @@ pub fn end_workspace_output() -> AppResult<()> {
     Ok(())
 }
 
-pub fn capture_output<T>(action: impl FnOnce() -> T) -> AppResult<(T, Vec<u8>)> {
+pub struct CapturedOutput {
+    pub output: Vec<u8>,
+    pub input: Vec<u8>,
+}
+
+pub fn capture_output<T>(action: impl FnOnce() -> T) -> AppResult<(T, CapturedOutput)> {
     let _capture_state = CaptureStateGuard::enter(io::stderr().is_terminal());
     let mut pipe_fds = [0; 2];
     if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
@@ -170,10 +189,14 @@ pub fn capture_output<T>(action: impl FnOnce() -> T) -> AppResult<(T, Vec<u8>)> 
     let _ = io::stdout().flush();
     let _ = io::stderr().flush();
     drop(redirect);
-    let captured = reader
+    let output = reader
         .join()
         .map_err(|_| AppError::new("output capture thread panicked"))??;
-    Ok((result, captured))
+    let input = CAPTURED_INPUT
+        .lock()
+        .map(|mut captured| std::mem::take(&mut *captured))
+        .unwrap_or_default();
+    Ok((result, CapturedOutput { output, input }))
 }
 
 struct CaptureStateGuard {
@@ -186,6 +209,11 @@ impl CaptureStateGuard {
         let previous_terminal =
             CAPTURED_STDERR_IS_TERMINAL.swap(stderr_is_terminal, Ordering::AcqRel);
         let previous_active = OUTPUT_CAPTURE_ACTIVE.swap(true, Ordering::AcqRel);
+        if !previous_active {
+            if let Ok(mut captured) = CAPTURED_INPUT.lock() {
+                captured.clear();
+            }
+        }
         Self {
             previous_active,
             previous_terminal,

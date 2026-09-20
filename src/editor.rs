@@ -29,6 +29,7 @@ pub enum EditorAction {
     RunInteractive,
     RunClipboard,
     Build,
+    SelectText,
     TestCase(u64),
     TestAll,
 }
@@ -110,6 +111,7 @@ struct RenderState {
 #[derive(Clone, Copy)]
 struct RenderOptions<'a> {
     show_toolbar: bool,
+    selection_mode: bool,
     color: bool,
     case_ids: &'a [u64],
     context: &'a EditorContext,
@@ -183,11 +185,27 @@ impl LineEditor {
     }
 
     pub fn append_output(&mut self, output: &[u8]) {
+        self.append_captured_output(output, &[]);
+    }
+
+    pub fn append_captured_output(&mut self, output: &[u8], input: &[u8]) {
         let text = strip_terminal_sequences(&String::from_utf8_lossy(output));
-        self.output_lines.extend(
-            text.lines()
-                .map(|line| line.trim_end_matches('\r').to_string()),
-        );
+        let mut lines = text
+            .lines()
+            .map(|line| line.trim_end_matches('\r').to_string())
+            .collect::<Vec<_>>();
+        if !input.is_empty() {
+            let transcript = strip_terminal_sequences(&String::from_utf8_lossy(input));
+            let insert_at = lines
+                .iter()
+                .rposition(|line| line.starts_with("━━ RUN · interactive input"))
+                .map_or(lines.len(), |index| index + 1);
+            let mut input_lines = vec!["  Input".to_string()];
+            input_lines.extend(transcript.lines().map(|line| format!("    {line}")));
+            input_lines.push("  Output".to_string());
+            lines.splice(insert_at..insert_at, input_lines);
+        }
+        self.output_lines.extend(lines);
         if text.ends_with('\n') && self.output_lines.last().is_some_and(String::is_empty) {
             self.output_lines.pop();
         }
@@ -225,6 +243,7 @@ impl LineEditor {
         let mut history_index: Option<usize> = None;
         let mut draft = String::new();
         let mut mouse_capture = false;
+        let mut selection_mode = false;
         let mut render_state = RenderState::default();
         let mut layout = Layout::default();
         let mut redraw = true;
@@ -239,6 +258,7 @@ impl LineEditor {
                     &mut anchor_row,
                     RenderOptions {
                         show_toolbar: self.mouse,
+                        selection_mode,
                         color: self.color,
                         case_ids: &self.case_ids,
                         context: &self.context,
@@ -249,7 +269,7 @@ impl LineEditor {
                 )?;
                 redraw = false;
             }
-            let should_capture = self.mouse;
+            let should_capture = self.mouse && !selection_mode;
             if should_capture != mouse_capture {
                 if should_capture {
                     terminal_state::enable_mouse_capture()?;
@@ -263,6 +283,14 @@ impl LineEditor {
                 Event::Key(key)
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
+                    if selection_mode {
+                        if key.code == KeyCode::Esc {
+                            selection_mode = false;
+                            render_state.toolbar_dirty = true;
+                            redraw = true;
+                        }
+                        continue;
+                    }
                     if let Some(signal) = handle_key(
                         key,
                         &mut buffer,
@@ -303,6 +331,14 @@ impl LineEditor {
                             })
                             .flatten();
                         if let Some(action) = action {
+                            if action == EditorAction::SelectText {
+                                terminal_state::disable_mouse_capture()?;
+                                mouse_capture = false;
+                                selection_mode = true;
+                                render_state.toolbar_dirty = true;
+                                redraw = true;
+                                continue;
+                            }
                             terminal_state::disable_mouse_capture()?;
                             finish_line(prompt, &buffer, anchor_row, self.color)?;
                             return Ok(EditorSignal::Action(action));
@@ -672,6 +708,7 @@ fn render_workspace(
                 toolbar_row,
                 options.color,
                 options.case_ids,
+                options.selection_mode,
                 &mut layout,
             )?;
             state.toolbar = Some(toolbar_only(&layout));
@@ -686,14 +723,34 @@ fn render_workspace(
     }
 
     queue!(stderr, MoveTo(0, prompt_row), Clear(ClearType::CurrentLine))?;
-    draw_prompt(&mut stderr, prompt, options.color)?;
-    queue!(stderr, Print(buffer), Clear(ClearType::UntilNewLine))?;
-    let prefix_width = UnicodeWidthStr::width(prompt)
-        + UnicodeWidthStr::width(&buffer[..cursor.min(buffer.len())]);
+    let prefix_width = if options.selection_mode {
+        draw_selection_prompt(&mut stderr, options.color)?;
+        UnicodeWidthStr::width(" Select text · Ctrl-Shift-C copy · Esc return")
+    } else {
+        draw_prompt(&mut stderr, prompt, options.color)?;
+        queue!(stderr, Print(buffer), Clear(ClearType::UntilNewLine))?;
+        UnicodeWidthStr::width(prompt) + UnicodeWidthStr::width(&buffer[..cursor.min(buffer.len())])
+    };
     let cursor_column = (prefix_width % width as usize) as u16;
     queue!(stderr, MoveTo(cursor_column, prompt_row), Show)?;
     stderr.flush()?;
     Ok(layout)
+}
+
+fn draw_selection_prompt(output: &mut impl Write, color: bool) -> AppResult<()> {
+    if color {
+        queue!(output, SetForegroundColor(theme::PRIMARY_SOFT))?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Bold),
+        Print(" Select text"),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        Print(" · Ctrl-Shift-C copy · Esc return"),
+        Clear(ClearType::UntilNewLine)
+    )?;
+    Ok(())
 }
 
 fn draw_workspace_header(
@@ -954,6 +1011,12 @@ fn draw_output_line(
             queue!(output, SetForegroundColor(theme::DANGER))?;
         } else if trimmed.starts_with('!') || trimmed.contains("warning:") {
             queue!(output, SetForegroundColor(theme::WARNING))?;
+        } else if trimmed == "Input" || trimmed == "Output" {
+            queue!(
+                output,
+                SetForegroundColor(theme::PRIMARY_SOFT),
+                SetAttribute(Attribute::Bold)
+            )?;
         } else if line.starts_with("━━ ") {
             queue!(
                 output,
@@ -1039,6 +1102,7 @@ fn draw_toolbar(
     row: u16,
     color: bool,
     case_ids: &[u64],
+    selection_mode: bool,
     layout: &mut Layout,
 ) -> AppResult<()> {
     layout.toolbar_row = row;
@@ -1072,6 +1136,19 @@ fn draw_toolbar(
             EditorAction::Build,
             color,
             theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_action(
+            output,
+            "S",
+            EditorAction::SelectText,
+            color,
+            if selection_mode {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
             &mut column,
             layout,
         )?;
@@ -1114,6 +1191,19 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_action(
+            output,
+            "[S]",
+            EditorAction::SelectText,
+            color,
+            if selection_mode {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
+            &mut column,
+            layout,
+        )?;
         draw_toolbar_text(output, " T", color, &mut column)?;
         draw_test_actions(
             output,
@@ -1152,6 +1242,20 @@ fn draw_toolbar(
             EditorAction::Build,
             color,
             theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, "  ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[ Select ]",
+            EditorAction::SelectText,
+            color,
+            if selection_mode {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
             &mut column,
             layout,
         )?;

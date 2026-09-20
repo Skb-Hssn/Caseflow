@@ -205,6 +205,24 @@ fn ctrl_c_interrupts_child_and_returns_to_repl() {
 }
 
 #[test]
+fn interactive_input_is_retained_after_enter() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "value = input()\nprint(f'answer:{value}')\n",
+    );
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+    session.send(b"/run\r");
+    session.wait_for("interactive input");
+    session.send(b"hello-world\r");
+    session.wait_for("answer:hello-world");
+    session.wait_for("    hello-world");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn mouse_click_selects_a_file_completion() {
     let directory = TempDir::new().unwrap();
     let source = source(
@@ -328,12 +346,26 @@ fn mouse_toolbar_runs_a_specific_numbered_case() {
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[ 7 ]");
     session.wait_for("[ All ]");
-    // The first numbered case begins at zero-based column 42 on the full bar.
-    session.send(b"\x1b[<0;44;23M");
+    // The first numbered case begins at zero-based column 54 on the full bar.
+    session.send(b"\x1b[<0;56;23M");
     session.wait_for("INPUT ·");
     session.wait_for("OUTPUT");
     session.wait_for("case-seven");
     session.wait_for("Success (exit 0)");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn select_button_releases_mouse_for_native_copying() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('selectable')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[ Select ]");
+    session.send(b"\x1b[<0;38;23M");
+    session.wait_for("Ctrl-Shift-C copy · Esc return");
+    session.send(b"\x1b");
+    session.wait_for_count("run-cli:main.py", 2);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }

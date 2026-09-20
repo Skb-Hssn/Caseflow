@@ -74,6 +74,7 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                     EditorAction::RunInteractive => "/run interactive".to_string(),
                     EditorAction::RunClipboard => "/run clipboard".to_string(),
                     EditorAction::Build => "/build".to_string(),
+                    EditorAction::SelectText => unreachable!("handled by the editor"),
                     EditorAction::TestCase(id) => format!("/test {id}"),
                     EditorAction::TestAll => "/test all".to_string(),
                 };
@@ -121,9 +122,9 @@ fn submit(
         }
     });
     let restore = terminal::end_workspace_output();
-    let (action, output) = captured?;
+    let (action, captured) = captured?;
     restore?;
-    editor.append_output(&output);
+    editor.append_captured_output(&captured.output, &captured.input);
     Ok(action)
 }
 

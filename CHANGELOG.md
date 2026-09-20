@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-20
+
+### Changed
+
+- Removed the vertical gutter from retained interactive input.
+- Added a native terminal-selection mode that releases application mouse
+  tracking for drag selection and clipboard copying, then restores it on Esc.
+
+## [0.4.3] - 2026-09-20
+
+### Fixed
+
+- Retained terminal input from interactive runs in a labeled input block after
+  submission, instead of losing the terminal echo during the next redraw.
+
 ## [0.4.2] - 2026-09-20
 
 ### Fixed

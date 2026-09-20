@@ -4,7 +4,7 @@
 .*.run-cli.*.tmp
 a.cpp
 a.go
-a.in1
+a.in*
 a.ky
 a.kt
 a.py
