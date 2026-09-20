@@ -43,10 +43,6 @@ pub fn build(
     let (compile, run) = build_commands(source, mode, config, &artifact_dir)?;
     require_tool(&compile.program.to_string_lossy())?;
     ui.header("BUILD", format!("{} · {mode}", source.path.display()));
-    ui.info(format!("Compiler  {}", compile.program.to_string_lossy()));
-    if ui.interactive() {
-        ui.info(format!("Command   {}", compile.display()));
-    }
 
     let status = Command::new(&compile.program)
         .args(&compile.args)
@@ -64,7 +60,7 @@ pub fn build(
             code,
         ));
     }
-    ui.success("Compilation finished");
+    ui.success("Build complete");
 
     Ok(BuildProduct { command: run })
 }

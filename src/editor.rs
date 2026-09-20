@@ -9,9 +9,10 @@ use crossterm::event::{
 use crossterm::style::{
     Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
 };
-use crossterm::terminal::{self, Clear, ClearType, ScrollUp};
+use crossterm::terminal::{self, Clear, ClearType};
 use crossterm::{execute, queue};
 use std::fs::{self, OpenOptions};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -38,7 +39,18 @@ pub struct LineEditor {
     mouse: bool,
     color: bool,
     case_ids: Vec<u64>,
+    context: EditorContext,
+    output_lines: Vec<String>,
+    scroll_offset: usize,
     warning: Option<String>,
+}
+
+#[derive(Default)]
+struct EditorContext {
+    source: String,
+    language: String,
+    mode: String,
+    mouse: bool,
 }
 
 struct RawGuard;
@@ -87,9 +99,9 @@ struct Layout {
 
 #[derive(Default)]
 struct RenderState {
-    dynamic_start: u16,
-    dynamic_end: u16,
-    has_dynamic: bool,
+    frame_size: Option<(u16, u16)>,
+    content_signature: u64,
+    header_signature: u64,
     toolbar: Option<Layout>,
     toolbar_size: Option<(u16, u16)>,
     toolbar_dirty: bool,
@@ -100,6 +112,9 @@ struct RenderOptions<'a> {
     show_toolbar: bool,
     color: bool,
     case_ids: &'a [u64],
+    context: &'a EditorContext,
+    output_lines: &'a [String],
+    scroll_offset: usize,
 }
 
 impl LineEditor {
@@ -129,6 +144,9 @@ impl LineEditor {
             mouse,
             color,
             case_ids: Vec::new(),
+            context: EditorContext::default(),
+            output_lines: Vec::new(),
+            scroll_offset: 0,
             warning,
         }
     }
@@ -147,6 +165,51 @@ impl LineEditor {
 
     pub fn set_case_ids(&mut self, case_ids: Vec<u64>) {
         self.case_ids = case_ids;
+    }
+
+    pub fn set_context(
+        &mut self,
+        source: impl Into<String>,
+        language: impl Into<String>,
+        mode: impl Into<String>,
+        mouse: bool,
+    ) {
+        self.context = EditorContext {
+            source: source.into(),
+            language: language.into(),
+            mode: mode.into(),
+            mouse,
+        };
+    }
+
+    pub fn append_output(&mut self, output: &[u8]) {
+        let text = strip_terminal_sequences(&String::from_utf8_lossy(output));
+        self.output_lines.extend(
+            text.lines()
+                .map(|line| line.trim_end_matches('\r').to_string()),
+        );
+        if text.ends_with('\n') && self.output_lines.last().is_some_and(String::is_empty) {
+            self.output_lines.pop();
+        }
+        const MAX_OUTPUT_LINES: usize = 20_000;
+        if self.output_lines.len() > MAX_OUTPUT_LINES {
+            self.output_lines
+                .drain(..self.output_lines.len() - MAX_OUTPUT_LINES);
+        }
+        self.scroll_offset = 0;
+    }
+
+    pub fn begin_command(&mut self, command: &str) {
+        if !self.output_lines.is_empty()
+            && self
+                .output_lines
+                .last()
+                .is_some_and(|line| !line.is_empty())
+        {
+            self.output_lines.push(String::new());
+        }
+        self.output_lines.push(format!("› {command}"));
+        self.scroll_offset = 0;
     }
 
     pub fn read_line(&mut self, prompt: &str) -> AppResult<EditorSignal> {
@@ -168,7 +231,7 @@ impl LineEditor {
 
         loop {
             if redraw {
-                layout = render(
+                layout = render_workspace(
                     prompt,
                     &buffer,
                     cursor,
@@ -178,6 +241,9 @@ impl LineEditor {
                         show_toolbar: self.mouse,
                         color: self.color,
                         case_ids: &self.case_ids,
+                        context: &self.context,
+                        output_lines: &self.output_lines,
+                        scroll_offset: self.scroll_offset,
                     },
                     &mut render_state,
                 )?;
@@ -272,6 +338,17 @@ impl LineEditor {
                     }
                     MouseEventKind::ScrollDown if menu.is_some() => {
                         activate_selection(menu.as_mut(), 1);
+                        redraw = true;
+                    }
+                    MouseEventKind::ScrollUp => {
+                        self.scroll_offset = self
+                            .scroll_offset
+                            .saturating_add(3)
+                            .min(self.output_lines.len().saturating_sub(1));
+                        redraw = true;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(3);
                         redraw = true;
                     }
                     _ => {}
@@ -500,223 +577,100 @@ fn navigate_history(
     *cursor = buffer.len();
 }
 
-fn render(
+fn render_workspace(
     prompt: &str,
     buffer: &str,
     cursor: usize,
     menu: Option<&mut CompletionMenu>,
     anchor_row: &mut u16,
-    options: RenderOptions,
+    options: RenderOptions<'_>,
     state: &mut RenderState,
 ) -> AppResult<Layout> {
     let (width, height) = terminal::size().unwrap_or((80, 24));
     let width = width.max(1);
-    let show_toolbar = options.show_toolbar && height >= 2;
-    let color = options.color;
-    let content_height = height.saturating_sub(u16::from(show_toolbar)).max(1);
-    let line_width = UnicodeWidthStr::width(prompt) + UnicodeWidthStr::width(buffer);
-    let prompt_rows = (line_width / width as usize) as u16 + 1;
-    let visible_capacity = content_height.saturating_sub(prompt_rows + 3).max(1) as usize;
-    let visible = menu
-        .as_ref()
-        .map(|active| active.candidates.len().min(visible_capacity).min(10))
-        .unwrap_or(0);
-    let needed_rows = prompt_rows + if visible > 0 { visible as u16 + 2 } else { 0 };
-    if anchor_row.saturating_add(needed_rows) >= content_height {
-        let shift = anchor_row
-            .saturating_add(needed_rows)
-            .saturating_sub(content_height.saturating_sub(1));
-        if shift > 0 {
-            execute!(io::stderr(), ScrollUp(shift))?;
-            *anchor_row = anchor_row.saturating_sub(shift);
-            if state.has_dynamic {
-                state.dynamic_start = state.dynamic_start.saturating_sub(shift);
-                state.dynamic_end = state.dynamic_end.saturating_sub(shift);
-            }
-            if let Some(toolbar) = state.toolbar.as_mut() {
-                toolbar.toolbar_row = toolbar.toolbar_row.saturating_sub(shift);
-            }
-            state.toolbar_dirty = true;
-        }
+    let height = height.max(1);
+    let show_toolbar = options.show_toolbar && height >= 4;
+    let footer_rows = if show_toolbar { 2 } else { 1 };
+    let header_rows = terminal_state::WORKSPACE_HEADER_ROWS
+        .min(height.saturating_sub(footer_rows).saturating_sub(1));
+    let prompt_row = height - 1;
+    let content_start = header_rows;
+    let content_end = height.saturating_sub(footer_rows).max(content_start);
+    *anchor_row = prompt_row;
+
+    let size_changed = state.frame_size != Some((width, height));
+    if size_changed {
+        terminal_state::end_workspace_output()?;
+        state.frame_size = Some((width, height));
+        state.toolbar_dirty = true;
     }
 
-    let dynamic_start = *anchor_row;
-    let dynamic_end = anchor_row.saturating_add(needed_rows).min(content_height);
-    let clear_start = if state.has_dynamic {
-        state.dynamic_start.min(dynamic_start)
-    } else {
-        dynamic_start
-    };
-    let clear_end = if state.has_dynamic {
-        state.dynamic_end.max(dynamic_end)
-    } else {
-        dynamic_end
-    }
-    .min(content_height);
+    let header_signature = hash_value(&(
+        width,
+        height,
+        options.context.source.as_str(),
+        options.context.language.as_str(),
+        options.context.mode.as_str(),
+        options.context.mouse,
+    ));
+    let menu_signature = menu.as_ref().map(|active| {
+        let candidates = active
+            .candidates
+            .iter()
+            .map(|candidate| candidate.value.as_str())
+            .collect::<Vec<_>>();
+        (active.selected, active.offset, active.dimmed, candidates)
+    });
+    let content_signature = hash_value(&(
+        width,
+        height,
+        buffer,
+        options.output_lines.len(),
+        options.scroll_offset,
+        menu_signature,
+    ));
+
     let mut stderr = io::stderr();
-    for row in clear_start..clear_end {
-        queue!(stderr, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-    }
-    queue!(stderr, MoveTo(0, *anchor_row))?;
-    draw_prompt(&mut stderr, prompt, color)?;
-    queue!(stderr, Print(buffer))?;
-    let mut layout = Layout::default();
-    if let Some(active) = menu {
-        if active.selected < active.offset {
-            active.offset = active.selected;
-        } else if active.selected >= active.offset + visible {
-            active.offset = active.selected + 1 - visible;
-        }
-        let header_row = *anchor_row + prompt_rows;
-        queue!(stderr, MoveTo(0, header_row))?;
-        if color {
-            queue!(
-                stderr,
-                SetForegroundColor(if active.dimmed {
-                    theme::MUTED
-                } else {
-                    theme::PRIMARY
-                })
-            )?;
-        }
-        if active.dimmed {
-            queue!(stderr, SetAttribute(Attribute::Dim))?;
-        } else {
-            queue!(stderr, SetAttribute(Attribute::Bold))?;
-        }
-        queue!(
-            stderr,
-            Print(if active.dimmed {
-                "  Commands"
-            } else {
-                "  Suggestions"
-            }),
-            SetAttribute(Attribute::Reset),
-            ResetColor,
-            SetAttribute(Attribute::Dim),
-            Print(format!("  ·  {} matches", active.candidates.len())),
-            SetAttribute(Attribute::Reset),
-            Clear(ClearType::UntilNewLine)
+    if size_changed || state.header_signature != header_signature {
+        draw_workspace_header(
+            &mut stderr,
+            width,
+            header_rows,
+            options.context,
+            options.color,
         )?;
-        layout.candidate_row = header_row + 1;
-        layout.visible_candidates = visible;
-        for visible_index in 0..visible {
-            let candidate_index = active.offset + visible_index;
-            let candidate = &active.candidates[candidate_index];
-            queue!(
-                stderr,
-                MoveTo(0, layout.candidate_row + visible_index as u16)
-            )?;
-            let is_selected = candidate_index == active.selected;
-            if active.dimmed {
-                queue!(stderr, SetAttribute(Attribute::Dim))?;
-                if color {
-                    queue!(stderr, SetForegroundColor(theme::MUTED))?;
-                }
-            } else if is_selected && color {
-                queue!(
-                    stderr,
-                    SetForegroundColor(theme::ON_ACCENT),
-                    SetBackgroundColor(theme::PRIMARY),
-                    SetAttribute(Attribute::Bold)
-                )?;
-            } else if is_selected {
-                queue!(stderr, SetAttribute(Attribute::Reverse))?;
-            }
-            let marker = if active.dimmed {
-                "·"
-            } else if is_selected {
-                "›"
-            } else {
-                " "
-            };
-            let label = format!(
-                " {marker} {}  ·  {}",
-                candidate.value, candidate.description
-            );
-            let label = truncate_width(&label, width.saturating_sub(1) as usize);
-            if is_selected && !active.dimmed {
-                queue!(
-                    stderr,
-                    Print(pad_width(&label, width.saturating_sub(1) as usize)),
-                    SetAttribute(Attribute::Reset),
-                    ResetColor
-                )?;
-            } else {
-                queue!(
-                    stderr,
-                    Print(label),
-                    SetAttribute(Attribute::Reset),
-                    ResetColor
-                )?;
-            }
-            queue!(stderr, Clear(ClearType::UntilNewLine))?;
-        }
-        layout.button_row = layout.candidate_row + visible as u16;
-        queue!(stderr, MoveTo(0, layout.button_row))?;
-        if active.dimmed {
-            queue!(
-                stderr,
-                SetAttribute(Attribute::Dim),
-                Print("  Tab complete · ↑↓ choose · Esc close"),
-                SetAttribute(Attribute::Reset),
-                Clear(ClearType::UntilNewLine)
-            )?;
-        } else if width >= 22 {
-            draw_button(&mut stderr, "Select", true)?;
-            queue!(stderr, Print("  "))?;
-            draw_button(&mut stderr, "Close", false)?;
-            layout.select_end = 10;
-            layout.cancel_start = 12;
-            layout.cancel_end = 21;
-        } else {
-            draw_compact_button(&mut stderr, "OK", true)?;
-            queue!(stderr, Print(" "))?;
-            draw_compact_button(&mut stderr, "X", false)?;
-            layout.select_end = 4;
-            layout.cancel_start = 5;
-            layout.cancel_end = 8;
-        }
-        if !active.dimmed && active.candidates.len() > visible {
-            queue!(
-                stderr,
-                Print(format!(
-                    "  {}/{}",
-                    active.selected + 1,
-                    active.candidates.len()
-                ))
-            )?;
-        }
-        if !active.dimmed && width >= 72 {
-            queue!(
-                stderr,
-                SetAttribute(Attribute::Dim),
-                Print("  ↑↓ navigate · Enter select · Esc close"),
-                SetAttribute(Attribute::Reset)
-            )?;
-        }
-        queue!(stderr, Clear(ClearType::UntilNewLine))?;
+        state.header_signature = header_signature;
+    }
+
+    let mut layout = Layout::default();
+    if size_changed || state.content_signature != content_signature || menu.is_some() {
+        draw_workspace_content(
+            &mut stderr,
+            width,
+            content_start,
+            content_end,
+            options.output_lines,
+            options.scroll_offset,
+            menu,
+            options.color,
+            &mut layout,
+        )?;
+        state.content_signature = content_signature;
+    } else if let Some(toolbar) = state.toolbar.as_ref() {
+        copy_toolbar(&mut layout, toolbar);
     }
 
     if show_toolbar {
+        let toolbar_row = height - 2;
         let toolbar_changed = state.toolbar_dirty
             || state.toolbar_size != Some((width, height))
             || state.toolbar.is_none();
         if toolbar_changed {
-            if let Some(previous) = state.toolbar.as_ref() {
-                if previous.toolbar_row != height - 1 && previous.toolbar_row < height {
-                    queue!(
-                        stderr,
-                        MoveTo(0, previous.toolbar_row),
-                        Clear(ClearType::CurrentLine)
-                    )?;
-                }
-            }
             draw_toolbar(
                 &mut stderr,
                 width,
-                height - 1,
-                color,
+                toolbar_row,
+                options.color,
                 options.case_ids,
                 &mut layout,
             )?;
@@ -726,42 +680,311 @@ fn render(
         } else if let Some(toolbar) = state.toolbar.as_ref() {
             copy_toolbar(&mut layout, toolbar);
         }
-    } else if let Some(previous) = state.toolbar.take() {
-        if previous.toolbar_row < height {
-            queue!(
-                stderr,
-                MoveTo(0, previous.toolbar_row),
-                Clear(ClearType::CurrentLine)
-            )?;
-        }
+    } else {
+        state.toolbar = None;
         state.toolbar_size = None;
     }
 
-    state.dynamic_start = dynamic_start;
-    state.dynamic_end = dynamic_end;
-    state.has_dynamic = true;
-
+    queue!(stderr, MoveTo(0, prompt_row), Clear(ClearType::CurrentLine))?;
+    draw_prompt(&mut stderr, prompt, options.color)?;
+    queue!(stderr, Print(buffer), Clear(ClearType::UntilNewLine))?;
     let prefix_width = UnicodeWidthStr::width(prompt)
         + UnicodeWidthStr::width(&buffer[..cursor.min(buffer.len())]);
-    let cursor_row = *anchor_row + (prefix_width / width as usize) as u16;
     let cursor_column = (prefix_width % width as usize) as u16;
-    queue!(stderr, MoveTo(cursor_column, cursor_row), Show)?;
+    queue!(stderr, MoveTo(cursor_column, prompt_row), Show)?;
     stderr.flush()?;
     Ok(layout)
 }
 
-fn finish_line(prompt: &str, buffer: &str, anchor_row: u16, color: bool) -> AppResult<()> {
-    let (width, _) = terminal::size().unwrap_or((80, 24));
-    let end_width = UnicodeWidthStr::width(prompt) + UnicodeWidthStr::width(buffer);
-    let row = anchor_row + (end_width / width.max(1) as usize) as u16;
-    let mut stderr = io::stderr();
+fn draw_workspace_header(
+    output: &mut impl Write,
+    width: u16,
+    rows: u16,
+    context: &EditorContext,
+    color: bool,
+) -> AppResult<()> {
+    for row in 0..rows {
+        queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        let text = match row {
+            0 => format!(
+                " run-cli  v{}  ·  {}",
+                env!("CARGO_PKG_VERSION"),
+                context.source
+            ),
+            1 => format!(
+                " {}  ·  {}  ·  mouse {}",
+                context.language,
+                context.mode,
+                if context.mouse { "on" } else { "off" }
+            ),
+            _ => "─".repeat(width as usize),
+        };
+        if color && row == 0 {
+            queue!(
+                output,
+                SetForegroundColor(theme::PRIMARY),
+                SetAttribute(Attribute::Bold)
+            )?;
+        } else if color && row == 1 {
+            queue!(output, SetForegroundColor(theme::MUTED))?;
+        } else if row == 0 {
+            queue!(output, SetAttribute(Attribute::Bold))?;
+        } else {
+            queue!(output, SetAttribute(Attribute::Dim))?;
+        }
+        queue!(
+            output,
+            Print(truncate_width(&text, width as usize)),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Clear(ClearType::UntilNewLine)
+        )?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_workspace_content(
+    output: &mut impl Write,
+    width: u16,
+    start: u16,
+    end: u16,
+    output_lines: &[String],
+    scroll_offset: usize,
+    menu: Option<&mut CompletionMenu>,
+    color: bool,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    let available = end.saturating_sub(start) as usize;
+    let visible_candidates = menu
+        .as_ref()
+        .map(|active| {
+            active
+                .candidates
+                .len()
+                .min(available.saturating_sub(2))
+                .min(10)
+        })
+        .unwrap_or(0);
+    let menu_rows = if visible_candidates > 0 {
+        visible_candidates + 2
+    } else {
+        0
+    };
+    let output_rows = available.saturating_sub(menu_rows);
+    let max_offset = output_lines.len().saturating_sub(output_rows);
+    let offset = scroll_offset.min(max_offset);
+    let line_end = output_lines.len().saturating_sub(offset);
+    let line_start = line_end.saturating_sub(output_rows);
+    let latest_command = output_lines
+        .iter()
+        .rposition(|line| line.starts_with("› "))
+        .unwrap_or(0);
+
+    for index in 0..output_rows {
+        let row = start + index as u16;
+        queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        let line_index = line_start + index;
+        if let Some(line) = output_lines.get(line_index) {
+            draw_output_line(
+                output,
+                line,
+                width.saturating_sub(1),
+                color,
+                line_index < latest_command,
+            )?;
+        }
+    }
+    if offset > 0 && output_rows > 0 {
+        let label = format!(" ↑ {offset} ");
+        let label_width = UnicodeWidthStr::width(label.as_str()) as u16;
+        if label_width < width {
+            queue!(
+                output,
+                MoveTo(width - label_width, start),
+                SetAttribute(Attribute::Reverse),
+                Print(label),
+                SetAttribute(Attribute::Reset)
+            )?;
+        }
+    }
+
+    if let Some(active) = menu {
+        if visible_candidates == 0 {
+            return Ok(());
+        }
+        if active.selected < active.offset {
+            active.offset = active.selected;
+        } else if active.selected >= active.offset + visible_candidates {
+            active.offset = active.selected + 1 - visible_candidates;
+        }
+        let header_row = start + output_rows as u16;
+        queue!(output, MoveTo(0, header_row), Clear(ClearType::CurrentLine))?;
+        if color {
+            queue!(
+                output,
+                SetForegroundColor(if active.dimmed {
+                    theme::MUTED
+                } else {
+                    theme::PRIMARY
+                })
+            )?;
+        }
+        queue!(
+            output,
+            SetAttribute(if active.dimmed {
+                Attribute::Dim
+            } else {
+                Attribute::Bold
+            }),
+            Print(if active.dimmed {
+                "  Options"
+            } else {
+                "  Suggestions"
+            }),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print(format!("  ·  {} matches", active.candidates.len())),
+            Clear(ClearType::UntilNewLine)
+        )?;
+        layout.candidate_row = header_row + 1;
+        layout.visible_candidates = visible_candidates;
+        for visible_index in 0..visible_candidates {
+            let candidate_index = active.offset + visible_index;
+            let candidate = &active.candidates[candidate_index];
+            let row = layout.candidate_row + visible_index as u16;
+            queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            let selected = candidate_index == active.selected;
+            if active.dimmed {
+                queue!(output, SetAttribute(Attribute::Dim))?;
+                if color {
+                    queue!(output, SetForegroundColor(theme::MUTED))?;
+                }
+            } else if selected && color {
+                queue!(
+                    output,
+                    SetForegroundColor(theme::ON_ACCENT),
+                    SetBackgroundColor(theme::PRIMARY),
+                    SetAttribute(Attribute::Bold)
+                )?;
+            } else if selected {
+                queue!(output, SetAttribute(Attribute::Reverse))?;
+            }
+            let marker = if active.dimmed {
+                "·"
+            } else if selected {
+                "›"
+            } else {
+                " "
+            };
+            let label = truncate_width(
+                &format!(
+                    " {marker} {}  ·  {}",
+                    candidate.value, candidate.description
+                ),
+                width.saturating_sub(1) as usize,
+            );
+            queue!(
+                output,
+                Print(if selected && !active.dimmed {
+                    pad_width(&label, width.saturating_sub(1) as usize)
+                } else {
+                    label
+                }),
+                SetAttribute(Attribute::Reset),
+                ResetColor,
+                Clear(ClearType::UntilNewLine)
+            )?;
+        }
+        layout.button_row = layout.candidate_row + visible_candidates as u16;
+        queue!(
+            output,
+            MoveTo(0, layout.button_row),
+            Clear(ClearType::CurrentLine)
+        )?;
+        if active.dimmed {
+            queue!(
+                output,
+                SetAttribute(Attribute::Dim),
+                Print("  Tab choose · ↑↓ navigate · Esc close"),
+                SetAttribute(Attribute::Reset)
+            )?;
+        } else if width >= 22 {
+            draw_button(output, "Select", true)?;
+            queue!(output, Print("  "))?;
+            draw_button(output, "Close", false)?;
+            layout.select_end = 10;
+            layout.cancel_start = 12;
+            layout.cancel_end = 21;
+        } else {
+            draw_compact_button(output, "OK", true)?;
+            queue!(output, Print(" "))?;
+            draw_compact_button(output, "X", false)?;
+            layout.select_end = 4;
+            layout.cancel_start = 5;
+            layout.cancel_end = 8;
+        }
+    }
+    Ok(())
+}
+
+fn draw_output_line(
+    output: &mut impl Write,
+    line: &str,
+    width: u16,
+    color: bool,
+    stale: bool,
+) -> AppResult<()> {
+    let trimmed = line.trim_start();
+    if stale {
+        queue!(output, SetAttribute(Attribute::Dim))?;
+        if color {
+            queue!(output, SetForegroundColor(theme::MUTED))?;
+        }
+    } else if color {
+        if line.starts_with("› ") {
+            queue!(
+                output,
+                SetForegroundColor(theme::PRIMARY),
+                SetAttribute(Attribute::Bold)
+            )?;
+        } else if trimmed.starts_with('✓') || trimmed.starts_with("Success (exit") {
+            queue!(output, SetForegroundColor(theme::SUCCESS))?;
+        } else if trimmed.starts_with('✗') || trimmed.starts_with("Failed (exit") {
+            queue!(output, SetForegroundColor(theme::DANGER))?;
+        } else if trimmed.starts_with('!') || trimmed.contains("warning:") {
+            queue!(output, SetForegroundColor(theme::WARNING))?;
+        } else if line.starts_with("━━ ") {
+            queue!(
+                output,
+                SetForegroundColor(theme::PRIMARY_SOFT),
+                SetAttribute(Attribute::Bold)
+            )?;
+        }
+    } else if line.starts_with("› ") || line.starts_with("━━ ") {
+        queue!(output, SetAttribute(Attribute::Bold))?;
+    }
     queue!(
-        stderr,
-        MoveTo(0, anchor_row),
-        Clear(ClearType::FromCursorDown)
+        output,
+        Print(truncate_width(line, width as usize)),
+        SetAttribute(Attribute::Reset),
+        ResetColor
     )?;
-    draw_prompt(&mut stderr, prompt, color)?;
-    execute!(stderr, Print(buffer), MoveTo(0, row + 1))?;
+    Ok(())
+}
+
+fn hash_value(value: &impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn finish_line(_prompt: &str, _buffer: &str, anchor_row: u16, _color: bool) -> AppResult<()> {
+    execute!(
+        io::stderr(),
+        MoveTo(0, anchor_row),
+        Clear(ClearType::CurrentLine)
+    )?;
     Ok(())
 }
 
@@ -776,7 +999,7 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
         return Ok(());
     }
 
-    let Some(rest) = prompt.strip_prefix("run-cli:") else {
+    let Some(rest) = prompt.strip_prefix(" run-cli:") else {
         queue!(
             output,
             SetForegroundColor(theme::PRIMARY),
@@ -787,10 +1010,10 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
         )?;
         return Ok(());
     };
-    let (source, mode) = rest.split_once(" · ").unwrap_or((rest, ""));
-    let mode = mode.strip_suffix(" › ").unwrap_or(mode);
+    let source = rest.strip_suffix(" › ").unwrap_or(rest);
     queue!(
         output,
+        Print(" "),
         SetForegroundColor(theme::PRIMARY),
         SetAttribute(Attribute::Bold),
         Print("run-cli"),
@@ -801,10 +1024,6 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
         SetAttribute(Attribute::Bold),
         Print(source),
         SetAttribute(Attribute::Reset),
-        SetForegroundColor(theme::MUTED),
-        Print(" · "),
-        SetForegroundColor(theme::MUTED),
-        Print(mode),
         SetForegroundColor(theme::PRIMARY),
         SetAttribute(Attribute::Bold),
         Print(" › "),
@@ -906,17 +1125,17 @@ fn draw_toolbar(
             layout,
         )?;
     } else {
-        draw_toolbar_text(output, "  Run ", color, &mut column)?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[ Interactive ]",
+            "[ Run ]",
             EditorAction::RunInteractive,
             color,
             theme::PRIMARY,
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, " ", color, &mut column)?;
+        draw_toolbar_text(output, "  ", color, &mut column)?;
         draw_toolbar_action(
             output,
             "[ Clipboard ]",
@@ -936,7 +1155,7 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "  Test ", color, &mut column)?;
+        draw_toolbar_text(output, "   Test ", color, &mut column)?;
         draw_test_actions(
             output,
             width,
@@ -1135,6 +1354,41 @@ fn truncate_width(value: &str, width: usize) -> String {
     result
 }
 
+fn strip_terminal_sequences(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut characters = value.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character == '\x1b' {
+            match characters.next() {
+                Some('[') => {
+                    for part in characters.by_ref() {
+                        if ('@'..='~').contains(&part) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    let mut escaped = false;
+                    for part in characters.by_ref() {
+                        if part == '\x07' || (escaped && part == '\\') {
+                            break;
+                        }
+                        escaped = part == '\x1b';
+                    }
+                }
+                Some(_) | None => {}
+            }
+        } else if character == '\r' {
+            if characters.peek() != Some(&'\n') {
+                result.push('\n');
+            }
+        } else if character == '\n' || character == '\t' || !character.is_control() {
+            result.push(character);
+        }
+    }
+    result
+}
+
 fn pad_width(value: &str, width: usize) -> String {
     let padding = width.saturating_sub(UnicodeWidthStr::width(value));
     format!("{value}{}", " ".repeat(padding))
@@ -1176,6 +1430,14 @@ mod tests {
     #[test]
     fn padding_respects_display_width() {
         assert_eq!(pad_width("λ", 3), "λ  ");
+    }
+
+    #[test]
+    fn captured_output_discards_terminal_control_sequences() {
+        assert_eq!(
+            strip_terminal_sequences("\x1b[31merror\x1b[0m\rprogress\n"),
+            "error\nprogress\n"
+        );
     }
 
     #[test]

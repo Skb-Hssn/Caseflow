@@ -22,9 +22,6 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
         ui,
         base_globals,
     };
-    session
-        .ui
-        .welcome(&session.source, session.mode, session.mouse);
 
     let mut editor = LineEditor::new(
         session.config.state_dir.join("history.txt"),
@@ -32,30 +29,30 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
         session.ui.color_enabled(),
     );
     if let Some(warning) = editor.take_warning() {
-        session.ui.warning(warning);
+        editor.append_output(format!("! {warning}\n").as_bytes());
     }
 
-    let mut first_prompt = true;
     loop {
+        editor.set_context(
+            session.source.path.display().to_string(),
+            session.source.language.to_string(),
+            session.mode.to_string(),
+            session.mouse,
+        );
         editor.set_case_ids(
             cases::list(&session.source)?
                 .into_iter()
                 .map(|saved| saved.id)
                 .collect(),
         );
-        if !first_prompt {
-            eprintln!();
-        }
-        first_prompt = false;
         let prompt = format!(
-            "run-cli:{} · {} › ",
+            " run-cli:{} › ",
             session
                 .source
                 .path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or("source"),
-            session.mode
+                .unwrap_or("source")
         );
         match editor.read_line(&prompt)? {
             EditorSignal::Success(line) => {
@@ -63,15 +60,13 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                 if line.is_empty() {
                     continue;
                 }
-                match session.handle(line) {
-                    Ok(SessionAction::Continue) => {}
-                    Ok(SessionAction::Exit) => return Ok(0),
-                    Err(error) => session.ui.error(error.message),
+                if submit(&mut session, &mut editor, line)? == SessionAction::Exit {
+                    return Ok(0);
                 }
                 editor.set_mouse(session.mouse);
                 editor.set_color(session.ui.color_enabled());
                 if let Some(warning) = editor.take_warning() {
-                    session.ui.warning(warning);
+                    editor.append_output(format!("! {warning}\n").as_bytes());
                 }
             }
             EditorSignal::Action(action) => {
@@ -82,16 +77,14 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                     EditorAction::TestCase(id) => format!("/test {id}"),
                     EditorAction::TestAll => "/test all".to_string(),
                 };
-                match session.handle(&command) {
-                    Ok(SessionAction::Continue) => {}
-                    Ok(SessionAction::Exit) => return Ok(0),
-                    Err(error) => session.ui.error(error.message),
+                if submit(&mut session, &mut editor, &command)? == SessionAction::Exit {
+                    return Ok(0);
                 }
                 editor.set_mouse(session.mouse);
                 editor.set_color(session.ui.color_enabled());
             }
             EditorSignal::CtrlC => {
-                eprintln!("^C");
+                editor.append_output(b"^C\n");
             }
             EditorSignal::CtrlD => return Ok(0),
         }
@@ -107,9 +100,31 @@ struct Session {
     base_globals: GlobalOptions,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SessionAction {
     Continue,
     Exit,
+}
+
+fn submit(
+    session: &mut Session,
+    editor: &mut LineEditor,
+    command: &str,
+) -> AppResult<SessionAction> {
+    editor.begin_command(command);
+    terminal::begin_workspace_output(session.mouse)?;
+    let captured = terminal::capture_output(|| match session.handle(command) {
+        Ok(action) => action,
+        Err(error) => {
+            session.ui.error(error.message);
+            SessionAction::Continue
+        }
+    });
+    let restore = terminal::end_workspace_output();
+    let (action, output) = captured?;
+    restore?;
+    editor.append_output(&output);
+    Ok(action)
 }
 
 impl Session {

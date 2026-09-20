@@ -37,6 +37,11 @@ with `/quit` or Ctrl-D restores the previous terminal contents. Terminal state
 is also restored after handled signals, errors, and panics. One-shot commands
 continue to print in the normal terminal.
 
+The compact session header stays fixed at the top, while mouse actions and the
+command line stay fixed at the bottom. Each submitted command starts a distinct
+block in the middle viewport, and older blocks are dimmed. Scroll the retained
+output with the mouse wheel without moving the surrounding UI.
+
 Run `run-cli` without a source to open a fuzzy source picker: type any
 subsequence of the path to filter it, use arrows to move, and press Enter to
 select. Inside a session:
@@ -69,7 +74,7 @@ and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths
 containing spaces are quoted automatically. Completion lists are scrollable,
 resize-aware, and capped to the available terminal height.
 
-Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with separate `Interactive` and `Clipboard` run buttons, `Build`, each saved case number, and `All`. Clipboard run saves the clipboard as the next case before executing it, so it can be rerun from its numbered button. Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit.
+Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with separate `Run` and `Clipboard` buttons, `Build`, each saved case number, and `All`. Clipboard run saves the clipboard as the next case before executing it, so it can be rerun from its numbered button. Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit.
 
 The toolbar uses compact labels on narrow terminals: `I` is interactive run,
 `C` is clipboard run, `B` is build, and `A` tests all saved cases.

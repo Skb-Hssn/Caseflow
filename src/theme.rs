@@ -7,6 +7,7 @@ pub const PRIMARY_SOFT: Color = Color::AnsiValue(110);
 pub const MUTED: Color = Color::AnsiValue(245);
 pub const SURFACE: Color = Color::AnsiValue(238);
 pub const ON_ACCENT: Color = Color::AnsiValue(231);
+pub const SUCCESS: Color = Color::AnsiValue(78);
 pub const WARNING: Color = Color::AnsiValue(180);
 pub const DANGER: Color = Color::AnsiValue(203);
 

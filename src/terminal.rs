@@ -10,8 +10,10 @@ use crossterm::terminal::{
 };
 use crossterm::{execute, queue};
 use std::io::{self, IsTerminal, Write};
+use std::os::fd::{FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 struct TerminalGuard;
@@ -19,12 +21,15 @@ struct TerminalGuard;
 pub struct ScreenGuard;
 
 static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
+static OUTPUT_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CAPTURED_STDERR_IS_TERMINAL: AtomicBool = AtomicBool::new(false);
 
 // Normal tracking reports clicks, releases, and wheel events. Crossterm's
 // EnableMouseCapture also enables all-motion tracking (1003), which floods an
 // interactive editor with events whenever the pointer moves.
 const ENABLE_MOUSE_CLICKS: &str = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_MOUSE_TRACKING: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+pub const WORKSPACE_HEADER_ROWS: u16 = 3;
 
 impl TerminalGuard {
     fn enter(mouse: bool) -> AppResult<Self> {
@@ -96,6 +101,176 @@ pub fn enable_mouse_capture() -> AppResult<()> {
 pub fn disable_mouse_capture() -> AppResult<()> {
     execute!(io::stderr(), Print(DISABLE_MOUSE_TRACKING))?;
     Ok(())
+}
+
+pub fn stderr_is_terminal() -> bool {
+    if OUTPUT_CAPTURE_ACTIVE.load(Ordering::Acquire) {
+        CAPTURED_STDERR_IS_TERMINAL.load(Ordering::Acquire)
+    } else {
+        io::stderr().is_terminal()
+    }
+}
+
+pub fn begin_workspace_output(mouse: bool) -> AppResult<()> {
+    let (_, height) = terminal::size().unwrap_or((80, 24));
+    let footer_rows = if mouse && height >= 4 { 2 } else { 1 };
+    let header_rows =
+        WORKSPACE_HEADER_ROWS.min(height.saturating_sub(footer_rows).saturating_sub(1));
+    let top = header_rows.saturating_add(1);
+    let bottom = height.saturating_sub(footer_rows).max(top).min(height);
+    execute!(
+        io::stderr(),
+        Print(format!("\x1b[{top};{bottom}r")),
+        MoveTo(0, bottom.saturating_sub(1)),
+        Clear(ClearType::CurrentLine),
+        Show
+    )?;
+    Ok(())
+}
+
+pub fn end_workspace_output() -> AppResult<()> {
+    execute!(io::stderr(), Print("\x1b[r"))?;
+    Ok(())
+}
+
+pub fn capture_output<T>(action: impl FnOnce() -> T) -> AppResult<(T, Vec<u8>)> {
+    let _capture_state = CaptureStateGuard::enter(io::stderr().is_terminal());
+    let mut pipe_fds = [0; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let saved_stdout = duplicate_fd(libc::STDOUT_FILENO)?;
+    let saved_stderr = match duplicate_fd(libc::STDERR_FILENO) {
+        Ok(fd) => fd,
+        Err(error) => {
+            unsafe {
+                libc::close(pipe_fds[0]);
+                libc::close(pipe_fds[1]);
+                libc::close(saved_stdout);
+            }
+            return Err(error);
+        }
+    };
+    let forward_fd = match duplicate_fd(libc::STDERR_FILENO) {
+        Ok(fd) => fd,
+        Err(error) => {
+            unsafe {
+                libc::close(pipe_fds[0]);
+                libc::close(pipe_fds[1]);
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+            return Err(error);
+        }
+    };
+    let redirect = OutputRedirect::install(pipe_fds[1], saved_stdout, saved_stderr)?;
+    let reader_fd = pipe_fds[0];
+    let reader = thread::spawn(move || capture_and_forward(reader_fd, forward_fd));
+    let result = action();
+    let _ = io::stdout().flush();
+    let _ = io::stderr().flush();
+    drop(redirect);
+    let captured = reader
+        .join()
+        .map_err(|_| AppError::new("output capture thread panicked"))??;
+    Ok((result, captured))
+}
+
+struct CaptureStateGuard {
+    previous_active: bool,
+    previous_terminal: bool,
+}
+
+impl CaptureStateGuard {
+    fn enter(stderr_is_terminal: bool) -> Self {
+        let previous_terminal =
+            CAPTURED_STDERR_IS_TERMINAL.swap(stderr_is_terminal, Ordering::AcqRel);
+        let previous_active = OUTPUT_CAPTURE_ACTIVE.swap(true, Ordering::AcqRel);
+        Self {
+            previous_active,
+            previous_terminal,
+        }
+    }
+}
+
+impl Drop for CaptureStateGuard {
+    fn drop(&mut self) {
+        CAPTURED_STDERR_IS_TERMINAL.store(self.previous_terminal, Ordering::Release);
+        OUTPUT_CAPTURE_ACTIVE.store(self.previous_active, Ordering::Release);
+    }
+}
+
+struct OutputRedirect {
+    saved_stdout: RawFd,
+    saved_stderr: RawFd,
+}
+
+impl OutputRedirect {
+    fn install(write_fd: RawFd, saved_stdout: RawFd, saved_stderr: RawFd) -> AppResult<Self> {
+        if unsafe { libc::dup2(write_fd, libc::STDOUT_FILENO) } < 0 {
+            let error = io::Error::last_os_error();
+            unsafe {
+                libc::close(write_fd);
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+            return Err(error.into());
+        }
+        if unsafe { libc::dup2(write_fd, libc::STDERR_FILENO) } < 0 {
+            let error = io::Error::last_os_error();
+            unsafe {
+                libc::dup2(saved_stdout, libc::STDOUT_FILENO);
+                libc::close(write_fd);
+                libc::close(saved_stdout);
+                libc::close(saved_stderr);
+            }
+            return Err(error.into());
+        }
+        unsafe {
+            libc::close(write_fd);
+        }
+        Ok(Self {
+            saved_stdout,
+            saved_stderr,
+        })
+    }
+}
+
+impl Drop for OutputRedirect {
+    fn drop(&mut self) {
+        unsafe {
+            libc::dup2(self.saved_stdout, libc::STDOUT_FILENO);
+            libc::dup2(self.saved_stderr, libc::STDERR_FILENO);
+            libc::close(self.saved_stdout);
+            libc::close(self.saved_stderr);
+        }
+    }
+}
+
+fn duplicate_fd(fd: RawFd) -> AppResult<RawFd> {
+    let duplicated = unsafe { libc::dup(fd) };
+    if duplicated < 0 {
+        Err(io::Error::last_os_error().into())
+    } else {
+        Ok(duplicated)
+    }
+}
+
+fn capture_and_forward(reader_fd: RawFd, forward_fd: RawFd) -> AppResult<Vec<u8>> {
+    let mut reader = unsafe { std::fs::File::from_raw_fd(reader_fd) };
+    let mut forward = unsafe { std::fs::File::from_raw_fd(forward_fd) };
+    let mut captured = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let count = std::io::Read::read(&mut reader, &mut chunk)?;
+        if count == 0 {
+            break;
+        }
+        captured.extend_from_slice(&chunk[..count]);
+        forward.write_all(&chunk[..count])?;
+        forward.flush()?;
+    }
+    Ok(captured)
 }
 
 pub fn select_source(sources: &[PathBuf], mouse: bool, color: bool) -> AppResult<Option<PathBuf>> {

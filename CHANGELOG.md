@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-20
+
+### Fixed
+
+- Preserved terminal interactivity detection while capturing retained session
+  output, restoring the input and output sections for saved-case runs.
+
+## [0.4.1] - 2026-09-20
+
+### Changed
+
+- Simplified the full-screen layout with a compact header, shorter action bar,
+  one-line run summaries, and visible command boundaries in retained output.
+- Added semantic highlighting to commands, results, warnings, and build sections
+  so successive runs remain easy to scan.
+
+## [0.4.0] - 2026-09-20
+
+### Changed
+
+- Anchored the session header, mouse actions, and command line while moving
+  program output and diagnostics into a mouse-scrollable middle viewport.
+
 ## [0.3.0] - 2026-09-20
 
 ### Changed

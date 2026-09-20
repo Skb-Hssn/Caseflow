@@ -46,6 +46,7 @@ The prompt displays the active source, language, and build mode. Ctrl-C cancels 
 ### Buttons and mouse behavior
 
 - Interactive sessions run in a Vim-style alternate screen and restore the previous terminal contents on exit. Source pickers, file-suggestion menus, confirmation dialogs, and the fixed action bar expose mouse controls without affecting one-shot command output.
+- The header is anchored at the top, and the action bar and command line are anchored at the bottom. Program output and diagnostics are retained in a bounded middle viewport that supports mouse-wheel scrolling without moving the surrounding controls.
 - Buttons are keyboard-first: Tab and arrow keys move focus, Enter or Space activates the focused action, Esc cancels, and visible shortcut letters provide direct access. Every mouse action has an equivalent keyboard action.
 - Mouse support is optional and disabled by default. Users can enable it through `/mouse on`, `--mouse`, or configuration; `/status` shows whether it is active.
 - Mouse reporting is enabled only while `run-cli` owns an interactive picker or dialog. It is disabled before a child program receives the terminal and restored only after control returns to the REPL.

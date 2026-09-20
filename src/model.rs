@@ -114,14 +114,6 @@ impl CommandSpec {
         self.args.extend(arguments.into_iter().map(Into::into));
         self
     }
-
-    pub fn display(&self) -> String {
-        std::iter::once(&self.program)
-            .chain(self.args.iter())
-            .map(|part| shell_words::quote(&part.to_string_lossy()).into_owned())
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
 }
 
 #[derive(Debug, Clone)]

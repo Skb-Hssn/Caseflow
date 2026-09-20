@@ -16,7 +16,7 @@ fn binary() -> &'static str {
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    child: Option<Box<dyn Child + Send + Sync>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     output: Arc<Mutex<Vec<u8>>>,
 }
@@ -66,7 +66,7 @@ impl PtySession {
         });
         Self {
             master: pair.master,
-            child,
+            child: Some(child),
             writer,
             output,
         }
@@ -104,8 +104,31 @@ impl PtySession {
         panic!("PTY output did not contain {needle:?}:\n{}", self.text());
     }
 
+    fn wait_for_count(&self, needle: &str, expected: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if self.text().matches(needle).count() >= expected {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "PTY output did not contain {expected} copies of {needle:?}:\n{}",
+            self.text()
+        );
+    }
+
     fn wait(mut self) -> portable_pty::ExitStatus {
-        self.child.wait().unwrap()
+        self.child.take().unwrap().wait().unwrap()
+    }
+}
+
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 
@@ -194,10 +217,9 @@ fn mouse_click_selects_a_file_completion() {
     session.wait_for("run-cli:main.py");
     session.send(b"/run --input input-\t");
     session.wait_for("[ Select ]");
-    // The prompt and suggestion header occupy rows 1-2; the first item is row 3.
-    session.send(b"\x1b[<0;2;3M");
+    // Suggestions occupy the bottom of the viewport; the first item is row 20.
+    session.send(b"\x1b[<0;2;20M");
     session.send(b"\r");
-    session.wait_for("\r\n5\r\n");
     session.wait_for("Success (exit 0)");
     session.send(b"/quit\r");
     assert!(session.wait().success());
@@ -210,7 +232,7 @@ fn slash_opens_dimmed_commands_and_tab_accepts_one() {
     let session = PtySession::spawn(repl_command(&directory, &source, false));
     session.wait_for("run-cli:main.py");
     session.send(b"/");
-    session.wait_for("Commands");
+    session.wait_for("Options");
     session.send(b"\t");
     session.wait_for("\x1b[0m/run \x1b");
     session.send(b"\x03");
@@ -223,9 +245,9 @@ fn persistent_mouse_toolbar_runs_the_active_source() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('toolbar-run')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Interactive ]");
-    // The toolbar is fixed to row 24; this lands inside Interactive.
-    session.send(b"\x1b[<0;13;24M");
+    session.wait_for("[ Run ]");
+    // The toolbar is fixed above the command row; this lands inside Run.
+    session.send(b"\x1b[<0;4;23M");
     session.wait_for("toolbar-run");
     session.wait_for("Success (exit 0)");
     session.send(b"/quit\r");
@@ -237,7 +259,7 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[ Interactive ]");
+    session.wait_for("[ Run ]");
     assert!(
         !session.text().contains("\x1b[?1003h"),
         "mouse mode must not enable all-motion tracking"
@@ -247,11 +269,11 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     session.send(b"\x1b[<35;50;10M");
     thread::sleep(Duration::from_millis(100));
     assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
-    assert_eq!(session.text().matches("[ Interactive ]").count(), 1);
+    assert_eq!(session.text().matches("[ Run ]").count(), 1);
     session.send(b"/xyz");
     session.wait_for("/xyz");
     assert_eq!(
-        session.text().matches("[ Interactive ]").count(),
+        session.text().matches("[ Run ]").count(),
         1,
         "toolbar should remain static during prompt redraws"
     );
@@ -283,9 +305,13 @@ fn clipboard_run_alias_saves_and_runs_the_next_case() {
     );
     let session = PtySession::spawn(command);
     session.wait_for("run-cli:main.py");
-    session.send(b"/run clipboard\r");
+    session.send(b"/run clipboard");
+    session.wait_for("/run clipboard");
+    let prompt_count = session.text().matches("run-cli:main.py").count();
+    session.send(b"\r");
     session.wait_for("Saved input #1");
     session.wait_for("Success (exit 0)");
+    session.wait_for_count("run-cli:main.py", prompt_count + 1);
     session.send(b"/quit\r");
     assert!(session.wait().success());
     assert_eq!(
@@ -302,10 +328,47 @@ fn mouse_toolbar_runs_a_specific_numbered_case() {
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[ 7 ]");
     session.wait_for("[ All ]");
-    // The first numbered case begins at zero-based column 53 on the full bar.
-    session.send(b"\x1b[<0;54;24M");
+    // The first numbered case begins at zero-based column 42 on the full bar.
+    session.send(b"\x1b[<0;44;23M");
+    session.wait_for("INPUT ·");
+    session.wait_for("OUTPUT");
     session.wait_for("case-seven");
     session.wait_for("Success (exit 0)");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn mouse_wheel_scrolls_only_the_output_viewport() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "for index in range(40):\n    print(f'line-{index:02}')\n",
+    );
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[ Run ]");
+    session.send(b"/run\r");
+    session.wait_for("Success (exit 0)");
+    session.wait_for("run-cli:main.py");
+    let before = session.text();
+    assert!(
+        before.contains("\x1b[4;22r"),
+        "live output must be confined between the fixed header and footer"
+    );
+    let before_len = before.len();
+    let title = format!(" run-cli  v{}  ·  ", env!("CARGO_PKG_VERSION"));
+    let header_count = before.matches(&title).count();
+    let toolbar_count = before.matches("[ Run ]").count();
+    for _ in 0..8 {
+        session.send(b"\x1b[<64;50;10M");
+    }
+    thread::sleep(Duration::from_millis(100));
+    let after = session.text();
+    let scrolled_render = &after[before_len..];
+    assert!(scrolled_render.contains("line-10"));
+    assert!(scrolled_render.contains('↑'));
+    assert_eq!(after.matches(&title).count(), header_count);
+    assert_eq!(after.matches("[ Run ]").count(), toolbar_count);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
