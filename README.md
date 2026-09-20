@@ -1,303 +1,1003 @@
-# run-cli
+# Caseflow
 
-`run-cli` is a Linux-first competitive-programming runner with two interfaces:
+Caseflow is a Linux-first competitive-programming runner for building,
+executing, testing, and debugging solutions without leaving the terminal. It
+combines a full-screen interactive workspace with predictable one-shot
+commands for scripts, editor tasks, and CI.
 
-- An inline REPL with slash commands, history, completion, file suggestions, source selection, and optional mouse controls.
-- Structured one-shot commands for shell scripts, editor tasks, and CI.
+> **Command name:** the project is named **Caseflow**; the installed executable
+> is currently named **`run-cli`**.
 
-It supports C++, Python, C, Java, Rust, Go, and Kotlin and reads the same `<stem>.in<ID>` saved cases as [`run.sh`](run.sh).
+Caseflow supports C++, C, Python, Java, Rust, Go, and Kotlin. It manages saved
+test cases, automatically judges paired expected outputs, imports samples from
+Competitive Companion, performs differential stress testing, and keeps build
+artifacts outside the solution directory.
 
-## Install
+## Highlights
 
-Download a prebuilt GNU or musl archive from the GitHub Releases page, or build
-from source with Rust 1.74 or newer:
+- Full-screen REPL with a fixed header, scrollable output, command history,
+  fuzzy source selection, and context-aware suggestions.
+- Optional mouse toolbar for interactive runs, clipboard runs, saved tests,
+  debug mode, scrolling, and native text selection.
+- Script-friendly commands with clean stdout, diagnostics on stderr, and
+  meaningful exit statuses.
+- Saved cases using the familiar `<stem>.in<ID>` convention.
+- Automatic byte-for-byte judging when `<stem>.out<ID>` exists.
+- Competitive Companion sample import through a loopback-only HTTP receiver.
+- Differential stress testing with automatic failing-case preservation.
+- Standard and debug builds for seven languages.
+- Process-group timeouts and Ctrl-C escalation that also stop child processes.
+- Atomic output writes and cross-process locking for saved cases.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Supported languages](#supported-languages)
+- [Interactive workspace](#interactive-workspace)
+- [Saved cases and verdicts](#saved-cases-and-verdicts)
+- [One-shot commands](#one-shot-commands)
+- [Competitive Companion](#competitive-companion)
+- [Stress testing](#stress-testing)
+- [Configuration](#configuration)
+- [Shell completion](#shell-completion)
+- [Exit statuses](#exit-statuses)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+
+## Requirements
+
+Caseflow itself is a native Rust program, but each language requires its own
+compiler or runtime. Install only the tools you use.
+
+| Language | Extension | Default tools |
+| --- | --- | --- |
+| C++ | `.cpp` | `g++` |
+| C | `.c` | `gcc` |
+| Python | `.py` | `python3` |
+| Java | `.java` | `javac`, `java` |
+| Rust | `.rs` | `rustc` |
+| Go | `.go` | `go` |
+| Kotlin | `.kt` | `kotlinc`, `java` |
+
+Optional integrations use:
+
+- `wl-copy` and `wl-paste` on Wayland, or `xclip` on X11, for clipboard
+  operations.
+- `$VISUAL`, `$EDITOR`, `nvim`, or `vim` for `/case add` and `/case edit`.
+- `diff` for unified output from the explicit `compare` command. Caseflow falls
+  back to printing both files if `diff` is unavailable.
+- A terminal with ANSI escape-sequence support for the full-screen workspace.
+
+After installation, inspect the available toolchains and clipboard support:
 
 ```sh
-cargo install --path .
 run-cli doctor
 ```
 
-Build without installing:
+## Installation
+
+### Prebuilt Linux archive
+
+Tagged releases produce archives for:
+
+- `x86_64-unknown-linux-gnu`
+- `x86_64-unknown-linux-musl`
+
+Download the archive for your system from this repository's GitHub Releases
+page, extract it, and place `run-cli` somewhere on `PATH`:
+
+```sh
+tar -xzf run-cli-v*-x86_64-unknown-linux-gnu.tar.gz
+install -Dm755 run-cli-v*-x86_64-unknown-linux-gnu/run-cli \
+  "$HOME/.local/bin/run-cli"
+```
+
+Ensure `~/.local/bin` is on `PATH`, then verify the installation:
+
+```sh
+run-cli --version
+run-cli doctor
+```
+
+Use the musl archive instead when that target is more suitable for your Linux
+distribution.
+
+### Install from source
+
+Install a current stable Rust toolchain, clone or download this repository,
+and run:
+
+```sh
+cargo install --path . --locked
+run-cli --version
+run-cli doctor
+```
+
+By default, Cargo installs the executable into `~/.cargo/bin`.
+
+### Build without installing
+
+For local development or a repository-scoped binary:
 
 ```sh
 cargo build --release
 ./target/release/run-cli --help
 ```
 
-## Interactive use
+Throughout this README, replace `run-cli` with
+`./target/release/run-cli` when using the local release binary.
 
-Open a session for a source:
+## Quick start
+
+Given a solution named `A.cpp`, open the interactive workspace:
 
 ```sh
 run-cli A.cpp
 ```
 
-Interactive sessions use the terminal's alternate screen, like Vim. Exiting
-with `/exit` or Ctrl-D restores the previous terminal contents. Terminal state
-is also restored after handled signals, errors, and panics. One-shot commands
-continue to print in the normal terminal.
-
-The compact session header stays fixed at the top, while mouse actions and the
-command line stay fixed at the bottom. Each submitted command starts a distinct
-block in the middle viewport, and older blocks are dimmed. Scroll the retained
-output with the mouse wheel without moving the surrounding UI. Interactive
-stdin is retained in a labeled `Input` block after the program exits.
-Ctrl-C stops the active execution and returns to the prompt. If the program
-ignores the interrupt, run-cli escalates to termination and then a forced stop
-instead of waiting forever.
-
-To keep runaway print loops responsive, the REPL streams a bounded output
-prefix, suppresses the middle, and retains a small final tail containing the
-execution status. One-shot commands and explicit `--output` files are not
-truncated. Inherited REPL output uses a pseudo-terminal, so line-buffered C,
-C++, Python, and similar programs display completed lines while still running.
-
-Run `run-cli` without a source to open a fuzzy source picker: type any
-subsequence of the path to filter it, use arrows to move, and press Enter to
-select. Inside a session:
+Then enter:
 
 ```text
 /run
-/run clipboard
-/run --input sample.in --output answer.out
-/run --save
-/debug
-/debug on
-/build
-/test                       # all saved cases
-/test 1 3
-/test last
-/case list
-/case add                   # create the next case in an external editor
-/case edit 2                # edit an existing case
-/case paste --run
-/compare 1 expected.out
-/stress brute.cpp generator.py --runs 500 --timeout 2
-/companion                  # wait for samples from the browser extension
-/open B.cpp
-/again
-/clear
-/status
-/exit
 ```
 
-`/run` uses interactive terminal input. `/run clipboard` reads the clipboard,
-stores it as the next case ID, and runs that saved case. `/test` runs all saved
-cases by default; use `last` or one or more space- or comma-separated IDs to
-narrow the selection. When `A.out<ID>` exists beside `A.in<ID>`, `/test`
-compares the generated output byte for byte and shows per-case plus aggregate
-PASS/FAIL verdicts. Cases without expected output remain run-only. `/again`
-repeats the most recent run or test, while `/clear` clears the retained output
-viewport.
+Type the program input normally. Press Ctrl-C to stop a running program and
+return to Caseflow.
 
-`/debug` toggles debug mode. The explicit forms `/debug on`, `/debug off`, and
-`/debug toggle` are useful in history and scripts. `/open` switches the active
-source and opens the source picker when its path is omitted.
+To create and run saved cases:
 
-Typing `/` opens a dimmed command menu immediately; continue typing to filter
-it or press Tab to insert the highlighted full command. Options and files also
-appear passively when they become relevant after a command; Tab accepts the
-highlighted choice. Source positions prioritize
-supported language files, inputs prioritize saved cases and `.in`/`.txt` files,
-and expected output positions prioritize `.out`, `.ans`, and `.txt` files. Paths
-containing spaces are quoted automatically. Completion lists are scrollable,
-resize-aware, and capped to the available terminal height.
+```text
+/case add
+/test
+```
 
-Source pickers, file-completion menus, and destructive confirmations have keyboard-accessible `[ Select ]`, `[ Delete ]`, and `[ Cancel ]` controls. Enable optional mouse clicks with `run-cli --mouse`, `/mouse on`, or `ui.mouse = true` in configuration. Mouse mode adds a fixed bottom action bar with `Interactive` and `Clipboard` under `Run`, an on/off debug toggle, each saved case number under `Test`, and `All`. Clipboard run saves the clipboard as the next case before executing it, so it can be rerun from its numbered button. Mouse reporting is enabled only while the REPL owns the terminal, disabled while a submitted program owns it, and cleaned up on every normal, error, panic, or handled-signal exit. The build action remains available as `/build` rather than occupying the action bar.
-
-Clipboard and saved-case runs use a single grey `File` block with orange
-`Input` and `Output` labels, followed by a dim grey divider and a compact,
-dim-green one-line `System status` summary.
-
-Use the action bar's `Select` button to release the mouse to the terminal, drag
-over any visible text, and copy with `Ctrl+Shift+C`; the wheel, arrow keys, and
-Page Up/Down continue scrolling the output. Press `Esc` to restore run-cli
-mouse controls. Terminals that support the standard override can also select
-immediately with Shift-drag.
-
-The toolbar uses compact labels on narrow terminals: `I` is interactive run,
-`C` is clipboard run, `D` toggles debug mode, `S` is native text selection,
-and `A` tests all saved cases.
-
-## One-shot commands
+`/case add` opens the next input in your configured terminal editor. You can
+also create cases manually:
 
 ```sh
-# Interactive or piped stdin
-run-cli run A.cpp
-printf '2 3\n' | run-cli run A.cpp
-
-# Save clipboard input as the next case, then run it
-run-cli run A.cpp --clipboard
-
-# Named input and atomic output
-run-cli run A.cpp --input sample.in --output answer.out
-
-# Batch input/output pairs
-run-cli run A.cpp \
-  --input first.in --output first.out \
-  --input second.in --output second.out
-
-# Build modes
-run-cli build A.cpp
-run-cli build A.cpp --debug
-run-cli run A.cpp --debug --timeout 2
-
-# Saved cases
+printf '2 3\n' > A.in1
+printf '5\n' > A.out1
 run-cli test A.cpp
-run-cli test A.cpp 1 3
-run-cli test A.cpp last
-run-cli case list A.cpp
-run-cli case show A.cpp 1
-run-cli case copy A.cpp 1
-run-cli case add A.cpp
-run-cli case edit A.cpp 2
-run-cli case paste A.cpp --run
-run-cli case paste A.cpp 2
-run-cli case delete A.cpp 1 --force
-run-cli case clear A.cpp --force
-
-# Compare and stress
-run-cli compare A.cpp 1 expected.out
-run-cli stress A.cpp brute.cpp generator.py --runs 500
-
-# Import one problem from Competitive Companion
-run-cli companion A.cpp
-
-# Shell completion
-run-cli completion zsh > ~/.zfunc/_run-cli
-run-cli completion bash > ~/.local/share/bash-completion/completions/run-cli
-run-cli completion fish > ~/.config/fish/completions/run-cli.fish
 ```
 
-Bash, Zsh, and Fish integrations call the same parser-aware filtering and
-ranking engine used by the REPL, so source, input, output, and expected-file
-suggestions remain consistent in both interfaces.
+Because `A.out1` exists, Caseflow judges the generated output and prints a
+verdict:
 
-When stdout is redirected, `run-cli` leaves it exclusively for program output. Build messages, errors, and resource measurements go to stderr. An explicit output file is replaced atomically only after a successful run.
+```text
+✓ Case #1 verdict: PASS · matches A.out1
+✓ Verdict: PASS · 1/1 judged case(s) passed
+```
 
-## Competitive Companion
-
-Start a receiver for the source you want to test, then click
-[Competitive Companion](https://github.com/jmerle/competitive-companion)'s
-green `+` button on a single problem page:
+For a direct, non-interactive run:
 
 ```sh
-# Inside the full-screen session
-/companion
-
-# Or as a one-shot command
-run-cli companion A.cpp
+printf '2 3\n' | run-cli run A.cpp
 ```
 
-The default port is `10043`, one of Competitive Companion's built-in ports.
-For a custom extension port or a different wait time, use
-`/companion --port 4244 --wait 300` (or the same options after the one-shot
-command). The listener accepts only local loopback connections, stops after
-one problem, and can be cancelled with Ctrl-C. Send a single problem page;
-multi-problem contest batches are rejected so samples from different problems
-cannot be mixed into one source.
+If the source argument has no extension, Caseflow treats it as C++:
 
-Each sample appends a matched pair such as `A.in3` and `A.out3`. Existing IDs
-are never overwritten. The `.out<ID>` file preserves the sample's expected
-output. `/test` automatically compares generated output with it byte for byte
-and returns a failure status if any judged case differs.
+```sh
+run-cli A       # resolves to A.cpp
+```
 
-## Saved cases
+Running `run-cli` without a source scans the current directory and opens a
+fuzzy source picker.
 
-Cases remain beside the source stem and are shared across languages:
+## Supported languages
+
+Caseflow resolves the language from the source extension. Compiled artifacts
+are stored below the XDG cache directory, not beside the source.
+
+| Language | Standard mode | Debug mode |
+| --- | --- | --- |
+| C++ | C++17, warnings, `LOCAL` | Debug symbols, libstdc++ checks, ASan, UBSan, stronger warnings |
+| C | C17 and warnings | Debug symbols, ASan, UBSan, stronger warnings |
+| Python | `python3 SOURCE` | `python3 -X dev SOURCE` |
+| Rust | Rust 2021 | Debug information, assertions, overflow checks |
+| Go | Normal `go build` | Race detector and disabled optimizations/inlining |
+| Java | Compiled classes and discovered package/class name | Debug information, linting, assertions |
+| Kotlin | Executable JAR | Kotlin/JVM debug options and assertions |
+
+Use standard mode for normal submissions and debug mode while diagnosing
+undefined behavior or assertion failures:
+
+```sh
+run-cli run A.cpp --debug
+run-cli build A.cpp --debug
+```
+
+Inside a session, toggle the persistent mode with `/debug` or set it explicitly
+with `/debug on` and `/debug off`.
+
+Python does not have a separate compilation step, so `run-cli build A.py` is
+rejected with an explanatory message. Use `run-cli run A.py` instead.
+
+## Interactive workspace
+
+### Starting a session
+
+```sh
+# Choose from supported sources in the current directory
+run-cli
+
+# Open a specific source
+run-cli A.cpp
+
+# Open with mouse controls enabled
+run-cli --mouse A.cpp
+
+# Start in debug mode
+run-cli --debug A.cpp
+```
+
+The workspace uses the terminal's alternate screen, like Vim. The header stays
+fixed at the top; program output and diagnostics occupy a scrollable middle
+viewport; the action bar and command prompt stay fixed at the bottom. `/exit`
+or Ctrl-D restores the previous terminal contents.
+
+Terminal state is also restored after handled errors, panics, and termination
+signals.
+
+### Slash commands
+
+| Command | Purpose |
+| --- | --- |
+| `/run [interactive] [OPTIONS]` | Build when needed and run with terminal input. |
+| `/run clipboard [OPTIONS]` | Append clipboard input as the next saved case and run it. |
+| `/build` | Compile the active source without running it. |
+| `/test [all\|last\|ID ...]` | Run all cases or selected saved-case IDs. |
+| `/case list` | List saved inputs for the active source stem. |
+| `/case show ID` | Print a saved input. |
+| `/case copy ID` | Copy a saved input to the clipboard. |
+| `/case paste [ID] [--run]` | Append clipboard input, or replace a specified ID. |
+| `/case add` | Create the next saved input in an external editor. |
+| `/case edit ID` | Edit an existing input in an external editor. |
+| `/case delete ID` | Confirm and delete an input and its paired expected output. |
+| `/case clear` | Confirm and delete every case for the active source. |
+| `/compare ID EXPECTED` | Run one case and compare it with an arbitrary expected file. |
+| `/stress BRUTE GENERATOR [OPTIONS]` | Differentially test against a trusted solution. |
+| `/companion [OPTIONS]` | Wait for one Competitive Companion problem payload. |
+| `/open [PATH]` | Switch source; omit the path to open the fuzzy picker. |
+| `/debug [on\|off\|toggle]` | Inspect or change the session build mode. |
+| `/mouse [on\|off\|toggle]` | Enable or disable mouse controls. |
+| `/again` | Repeat the latest `/run` or `/test`. |
+| `/clear` | Clear retained output from the viewport. |
+| `/status` | Show the active source, language, mode, cases, mouse state, and cache. |
+| `/doctor` | Inspect configured compilers, runtimes, and clipboard tools. |
+| `/help [COMMAND]` | Show general or command-specific help. |
+| `/exit` | Leave Caseflow and restore the terminal. |
+
+Run options inside the workspace are the same as the corresponding one-shot
+options after the source argument:
+
+```text
+/run --timeout 2
+/run --save
+/run --input sample.in
+/run --input sample.in --output answer.out
+/run clipboard --timeout 2
+```
+
+### Suggestions and history
+
+Typing `/` immediately opens a dimmed command menu. Continue typing to filter
+it, or press Tab to insert the highlighted command. Options and files appear
+automatically when the cursor reaches a relevant argument.
+
+- Source positions prioritize supported language files.
+- Input positions prioritize `.in<ID>`, `.in`, and `.txt` files.
+- Expected-output positions prioritize `.out`, `.ans`, and `.txt` files.
+- Output positions suggest safe output-like destinations.
+- Nested directories, absolute paths, `~`, hidden files, and paths containing
+  spaces are supported.
+- Paths containing spaces are quoted automatically.
+
+History is persisted at `$XDG_STATE_HOME/run-cli/history.txt` and retains the
+latest 1,000 commands.
+
+### Keyboard controls
+
+| Key | Behavior |
+| --- | --- |
+| `Tab` | Accept a suggestion or activate a suggestion list. |
+| `Up` / `Down` | Navigate suggestions, or command history when no menu is open. |
+| `Enter` | Submit the typed command; in an active picker, select the item. |
+| `Esc` | Close suggestions, cancel a picker, or leave native selection mode. |
+| `Ctrl-A` / `Ctrl-E` | Move to the beginning or end of the command line. |
+| `Home` / `End` | Move to the beginning or end; in selection mode, scroll fully. |
+| `Page Up` / `Page Down` | Scroll retained output in selection mode. |
+| `Ctrl-C` | Clear an idle command or stop the active process and return. |
+| `Ctrl-D` | Exit when the command line is empty. |
+
+### Mouse controls and text selection
+
+Mouse support is optional and disabled by default. Enable it with any of:
+
+```sh
+run-cli --mouse A.cpp
+```
+
+```text
+/mouse on
+```
+
+```toml
+[ui]
+mouse = true
+```
+
+The fixed toolbar exposes:
+
+- **Run → Interactive**
+- **Run → Clipboard**
+- **Test → numbered cases and All**
+- **Debug → On/Off**
+- **Select** for native terminal selection and copying
+
+The toolbar becomes more compact on narrow terminals. Mouse reporting is
+enabled only while Caseflow owns the workspace and is disabled while a child
+program or external editor owns the terminal.
+
+Choose **Select**, drag over visible text, and copy with your terminal's normal
+shortcut, commonly Ctrl-Shift-C. The wheel, arrow keys, Page Up/Down, Home, and
+End continue to navigate retained output. Press Esc to return to Caseflow mouse
+controls. Many terminals also support Shift-drag as a direct override.
+
+### Live output and runaway programs
+
+Caseflow streams output while the child is running, including line-buffered C,
+C++, and Python output. The interactive safety limiter prevents an infinite
+print loop from overwhelming the terminal:
+
+- The live prefix is capped at 16 KiB and a line budget of at least 256 lines.
+- Once suppressed, the final 8 KiB is retained and shown after the child exits.
+- The scrollable workspace retains up to 20,000 lines across commands.
+- One-shot output and explicit output files are not truncated.
+
+When the limit is reached, press Ctrl-C once. Caseflow signals the complete
+child process group, escalates to termination and then forced termination when
+necessary, and returns to the prompt.
+
+To preserve complete output explicitly:
+
+```text
+/run --input A.in1 --output full.out
+```
+
+## Saved cases and verdicts
+
+### File layout
+
+Cases live beside the source and are shared by files with the same stem:
 
 ```text
 A.cpp
 A.py
 A.in1
-A.in2
 A.out1
+A.in2
 A.out2
+A.in3
 ```
 
-- IDs are positive integers.
-- A new case uses `max(existing ID) + 1`; gaps are not renumbered or reused.
-- `last` selects the newest modification time, breaking ties with the highest ID
-  (the legacy `--last` spelling remains accepted).
-- Concurrent writers use a shared file lock.
-- Competitive Companion imports expected output as `.out<ID>`; deleting or
-  clearing an imported input also removes its matched output.
-- Tests automatically judge a case when its matching `.out<ID>` is present;
-  cases without one continue to run without a verdict.
-- Clipboard access prefers `wl-copy`/`wl-paste`, then `xclip`.
-- In the REPL, `/run clipboard` is the short form of saving the clipboard as
-  the next case and immediately running it.
-- `/case add` creates the next case and `/case edit ID` updates an existing
-  case using `$VISUAL`, `$EDITOR`, `nvim`, or `vim`, in that order. A failed or
-  cancelled editor leaves saved cases unchanged.
+`A.cpp` and `A.py` both use `A.in1`, `A.in2`, and `A.in3`.
 
-Interactive deletion asks for confirmation. One-shot deletion and clearing require `--force`.
+- Input IDs are positive integers.
+- New cases use `max(existing input ID) + 1`.
+- Gaps are not renumbered or reused.
+- `last` selects the most recently modified input, breaking ties with the
+  highest ID.
+- Concurrent Caseflow writers share a file lock.
 
-## Compatibility aliases
+### Creating cases
 
-Existing scripts continue to work while help and completion advertise the
-shorter canonical vocabulary:
+Use an external editor:
 
-- `run-cli exec` is an alias for `run-cli run`, and `run-cli diff` is an alias
-  for `run-cli compare`.
-- `/source` aliases `/open`; `/mode debug` and `/mode standard` alias
-  `/debug on` and `/debug off`.
-- `/diff` aliases `/compare`.
-- `/quit` aliases `/exit`.
-- Legacy test flags `--all`, `--last`, and `--id`, clipboard targets `next`,
-  `--next`, and `--id`, and stress flags `--brute`, `--generator`, and
-  `--limit` remain accepted.
-- `run-cli completions` remains an alias for `run-cli completion`.
+```text
+/case add
+/case edit 2
+```
+
+```sh
+run-cli case add A.cpp
+run-cli case edit A.cpp 2
+```
+
+Editor selection order is `$VISUAL`, `$EDITOR`, `nvim`, then `vim`. The edit is
+staged in the cache and committed atomically only when the editor exits
+successfully. A failed or cancelled edit leaves the saved case unchanged.
+
+Use the clipboard:
+
+```text
+/case paste
+/case paste --run
+/case paste 2
+```
+
+```sh
+run-cli case paste A.cpp
+run-cli case paste A.cpp --run
+run-cli case paste A.cpp 2
+```
+
+Capture interactive or piped stdin while running:
+
+```sh
+printf '2 3\n' | run-cli run A.cpp --save
+```
+
+Or create the files directly with any editor or script.
+
+### Automatic judging
+
+For input `A.in4`, Caseflow looks for `A.out4`.
+
+- If `A.out4` exists, stdout is streamed normally and simultaneously captured
+  for an exact byte-for-byte comparison.
+- Matching output produces a PASS verdict.
+- A mismatch, timeout, interruption, or runtime failure produces a FAIL verdict
+  and a nonzero test status.
+- If `A.out4` does not exist, the case remains run-only and receives no
+  correctness verdict.
+- When multiple judged cases run, Caseflow prints a final aggregate verdict.
+
+Whitespace and final newlines matter. For example, `YES` and `YES ` are
+different outputs, and a missing final newline also causes a mismatch.
+
+Run all cases or select specific IDs:
+
+```text
+/test
+/test all
+/test 1 3 5
+/test 1,3,5
+/test last
+```
+
+```sh
+run-cli test A.cpp
+run-cli test A.cpp 1 3 5
+run-cli test A.cpp last
+```
+
+Use `compare` when the expected file does not follow the `.out<ID>` naming
+convention:
+
+```sh
+run-cli compare A.cpp 1 official-answer.txt
+```
+
+### Inspecting and deleting cases
+
+```sh
+run-cli case list A.cpp
+run-cli case show A.cpp 1
+run-cli case copy A.cpp 1
+```
+
+Interactive deletion asks for confirmation:
+
+```text
+/case delete 1
+/case clear
+```
+
+One-shot deletion requires `--force`:
+
+```sh
+run-cli case delete A.cpp 1 --force
+run-cli case clear A.cpp --force
+```
+
+Deleting an input also deletes its paired `.out<ID>` file when present.
+
+## One-shot commands
+
+The general form is:
+
+```text
+run-cli [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
+```
+
+Global options are accepted with subcommands:
+
+| Option | Meaning |
+| --- | --- |
+| `--debug` | Use debug compiler/runtime settings. |
+| `--mouse` | Enable mouse controls when an interactive UI is opened. |
+| `--color auto\|always\|never` | Set color output policy. |
+| `-h`, `--help` | Show help. |
+| `-V`, `--version` | Show the installed version. |
+
+### Run
+
+```sh
+# Interactive stdin
+run-cli run A.cpp
+
+# Piped stdin
+printf '2 3\n' | run-cli run A.cpp
+
+# Read a named file
+run-cli run A.cpp --input sample.in
+
+# Save stdout atomically
+run-cli run A.cpp --input sample.in --output answer.out
+
+# Run several input/output pairs with one build
+run-cli run A.cpp \
+  --input first.in  --output first.out \
+  --input second.in --output second.out
+
+# Apply a time limit
+run-cli run A.cpp --timeout 2
+
+# Save stdin as the next .in<ID> case
+printf '2 3\n' | run-cli run A.cpp --save
+
+# Append clipboard input and run the saved case
+run-cli run A.cpp --clipboard
+```
+
+Repeat `--input` for batch execution. When `--output` is present in a batch,
+provide exactly one output for each input. Existing output destinations are
+replaced atomically only after successful execution.
+
+Caseflow rejects output destinations that would overwrite a source, an input,
+another selected output, or an internal build artifact.
+
+### Build
+
+```sh
+run-cli build A.cpp
+run-cli build A.cpp --debug
+```
+
+### Test and case management
+
+```sh
+run-cli test A.cpp
+run-cli test A.cpp all
+run-cli test A.cpp last
+run-cli test A.cpp 1 3,5
+
+run-cli case list A.cpp
+run-cli case show A.cpp 1
+run-cli case copy A.cpp 1
+run-cli case paste A.cpp
+run-cli case paste A.cpp 2
+run-cli case paste A.cpp --run
+run-cli case add A.cpp
+run-cli case edit A.cpp 2
+run-cli case delete A.cpp 2 --force
+run-cli case clear A.cpp --force
+```
+
+### Compare, stress, and sample import
+
+```sh
+run-cli compare A.cpp 1 expected.out
+run-cli stress A.cpp brute.cpp generator.py --runs 500 --timeout 2
+run-cli companion A.cpp
+run-cli companion A.cpp --port 10043 --wait 300
+```
+
+### Clean stdout in scripts
+
+When stdout is redirected, Caseflow reserves it for program output. Build
+messages, errors, resource measurements, and verdicts go to stderr:
+
+```sh
+run-cli run A.cpp --input A.in1 > actual.out
+```
+
+Use the command's exit status to decide whether the operation succeeded.
+
+## Clipboard workflows
+
+Clipboard access prefers Wayland tools and falls back to X11:
+
+1. `wl-paste` / `wl-copy`
+2. `xclip`
+
+Append and run clipboard input:
+
+```text
+/run clipboard
+```
+
+This is equivalent to saving the clipboard as the next case and testing that
+new case. It does not replace existing cases.
+
+Append without running, or replace an explicit case:
+
+```text
+/case paste
+/case paste 3
+```
+
+Copy an existing case:
+
+```text
+/case copy 3
+```
+
+Clipboard command failures do not create or replace case files.
+
+## Competitive Companion
+
+Caseflow supports the documented custom-tool protocol from
+[Competitive Companion](https://github.com/jmerle/competitive-companion).
+
+### Import from the interactive workspace
+
+Open the solution:
+
+```sh
+run-cli --mouse A.cpp
+```
+
+Start the receiver:
+
+```text
+/companion
+```
+
+Then open a single problem page in the browser and click Competitive
+Companion's green `+` button.
+
+### Import with a one-shot command
+
+```sh
+run-cli companion A.cpp
+```
+
+While the command is waiting, click the extension button.
+
+### Receiver behavior
+
+- The default port is `10043`, one of Competitive Companion's built-in ports.
+- The default wait timeout is 120 seconds.
+- The listener binds only to IPv4/IPv6 loopback interfaces.
+- One invocation accepts one problem payload and then exits.
+- Ctrl-C cancels the listener and returns status 130.
+- Request headers are limited to 64 KiB and the JSON body to 8 MiB.
+- Existing case IDs are never overwritten.
+- Each sample is imported atomically as a paired `.in<ID>` and `.out<ID>`.
+- Multi-problem contest batches are currently rejected so different problems
+  cannot accidentally be attached to one active source.
+
+Use a custom port or wait duration when needed:
+
+```text
+/companion --port 4244 --wait 300
+```
+
+```sh
+run-cli companion A.cpp --port 4244 --wait 300
+```
+
+After import, run `/test` or click a numbered Test button. Imported expected
+outputs are judged automatically.
+
+## Stress testing
+
+Stress testing compares the active solution with a trusted brute-force
+solution over inputs produced by a generator:
+
+```sh
+run-cli stress solution.cpp brute.cpp generator.py --runs 500 --timeout 2
+```
+
+Inside the workspace:
+
+```text
+/stress brute.cpp generator.py --runs 500 --timeout 2
+```
+
+The generator receives the 1-based case number as its first command-line
+argument and writes one input to stdout. For each iteration, Caseflow:
+
+1. Runs the generator.
+2. Sends the generated input to the candidate and brute-force programs.
+3. Compares their stdout byte for byte.
+4. Stops on the first mismatch or abnormal exit.
+5. Saves the failing input as the candidate's next `.in<ID>` case.
+6. Prints a unified diff and returns status 1.
+
+Example Python generator:
+
+```python
+import random
+import sys
+
+case_number = int(sys.argv[1])
+random.seed(case_number)
+n = random.randint(1, 20)
+values = [random.randint(-100, 100) for _ in range(n)]
+
+print(n)
+print(*values)
+```
+
+Defaults are 1,000 generated cases and two seconds for each generator,
+candidate, and brute execution. Configure them globally, per project, through
+environment variables, or with `--runs` and `--timeout`.
+
+Press Ctrl-C at any stage to stop the entire stress session. Caseflow cancels
+the active process, skips remaining cases, and does not save an interrupted
+input as a mismatch.
 
 ## Configuration
 
-Configuration is loaded in this order, from lowest to highest precedence:
+### Precedence
+
+Configuration is applied from lowest to highest precedence:
 
 1. Built-in defaults
-2. `$XDG_CONFIG_HOME/run-cli/config.toml` (or `~/.config/run-cli/config.toml`)
-3. The nearest `.run-cli.toml` above the active source
+2. `$XDG_CONFIG_HOME/run-cli/config.toml`, or `~/.config/run-cli/config.toml`
+3. The nearest `.run-cli.toml` found above the active source
 4. Environment variables
 5. Command-line flags
 
-Copy [`.run-cli.toml.example`](.run-cli.toml.example) to start a project configuration. Supported environment overrides are `CXX`, `CC`, `PYTHON`, `JAVAC`, `JAVA`, `RUSTC`, `GO`, `KOTLINC`, `NO_COLOR`, `STRESS_LIMIT`, and `STRESS_TIMEOUT`.
+Copy [`.run-cli.toml.example`](.run-cli.toml.example) into a project as
+`.run-cli.toml`, or use it as the basis for the user-level configuration.
 
-Build artifacts, locks, temporary outputs, and REPL history are stored below the appropriate XDG cache/state directories rather than beside source files.
+### Example
 
-## Stress protocol
+```toml
+[toolchains]
+cxx = "g++"
+cc = "gcc"
+python = "python3"
+javac = "javac"
+java = "java"
+rustc = "rustc"
+go = "go"
+kotlinc = "kotlinc"
 
-The generator receives the 1-based case number as its first argument and writes an input case to stdout. For every case, `run-cli`:
+[flags]
+cpp = ["-std=c++20", "-Wall", "-Wextra", "-DLOCAL"]
+c = ["-std=c17", "-Wall", "-Wextra"]
+# cpp_debug and c_debug may also replace the complete built-in debug lists.
 
-1. Runs the generator with the configured timeout.
-2. Sends its output to both the main program and brute-force solution.
-3. Compares stdout byte for byte.
-4. Saves the first mismatch or abnormal-exit input as the next `.in<ID>` case.
-5. Prints a unified diff and exits with status 1.
+[defaults]
+mode = "standard"       # "standard" or "debug"
+timeout = 2.0           # omit for no normal run/test timeout
+stress_limit = 1000
+stress_timeout = 2.0
 
-Press Ctrl-C at any time to stop the complete stress session. run-cli cancels
-the active generator, candidate, or brute process, skips all remaining cases,
-and does not save the interrupted input as a mismatch.
+[ui]
+color = "auto"          # "auto", "always", or "never"
+mouse = false
+```
 
-Defaults are 1,000 cases and two seconds for each process.
+Flag arrays replace the corresponding built-in list; they are not appended.
 
-## Exit status
+### Environment variables
 
-- Successful operation: `0`
-- Diff or stress mismatch: `1`
-- Invalid command or configuration: `2`
-- Timed out program: `124`
-- Interrupted program: `130`
-- Otherwise, compiler and program exit statuses are propagated.
+| Variable | Overrides |
+| --- | --- |
+| `CXX` | C++ compiler |
+| `CC` | C compiler |
+| `PYTHON` | Python interpreter |
+| `JAVAC` | Java compiler |
+| `JAVA` | Java/Kotlin runtime |
+| `RUSTC` | Rust compiler |
+| `GO` | Go tool |
+| `KOTLINC` | Kotlin compiler |
+| `NO_COLOR` | Disables color unless a later CLI color option overrides it |
+| `STRESS_LIMIT` | Default positive stress iteration count |
+| `STRESS_TIMEOUT` | Default positive per-process stress timeout in seconds |
+
+### Cache and state directories
+
+By default, Caseflow stores:
+
+- Build artifacts, locks, editor staging files, and temporary outputs below
+  `$XDG_CACHE_HOME/run-cli`, or `~/.cache/run-cli`.
+- REPL history below `$XDG_STATE_HOME/run-cli`, or
+  `~/.local/state/run-cli`.
+
+Only source files and explicitly saved `.in<ID>`/`.out<ID>` cases remain in the
+solution directory.
+
+## Shell completion
+
+Bash, Zsh, and Fish completion uses the same parser-aware filesystem filtering
+and ranking engine as the interactive workspace.
+
+### Bash
+
+```sh
+mkdir -p ~/.local/share/bash-completion/completions
+run-cli completion bash \
+  > ~/.local/share/bash-completion/completions/run-cli
+```
+
+Start a new shell or source the generated file.
+
+### Zsh
+
+```sh
+mkdir -p ~/.zfunc
+run-cli completion zsh > ~/.zfunc/_run-cli
+```
+
+Ensure the directory is in `fpath`, then initialize completion:
+
+```zsh
+fpath=(~/.zfunc $fpath)
+autoload -Uz compinit
+compinit
+```
+
+### Fish
+
+```fish
+mkdir -p ~/.config/fish/completions
+run-cli completion fish > ~/.config/fish/completions/run-cli.fish
+```
+
+The completion subcommand also accepts the other shells supported by
+`clap_complete`, including Elvish and PowerShell.
+
+## Compatibility aliases
+
+Canonical help stays concise, while older spellings remain accepted:
+
+- `run-cli exec` → `run-cli run`
+- `run-cli diff` → `run-cli compare`
+- `run-cli completions` → `run-cli completion`
+- `/source` → `/open`
+- `/mode debug` / `/mode standard` → `/debug on` / `/debug off`
+- `/diff` → `/compare`
+- `/quit` → `/exit`
+
+Legacy test flags `--all`, `--last`, and `--id`; clipboard targets `next`,
+`--next`, and `--id`; and stress options `--brute`, `--generator`, and `--limit`
+also remain parseable.
+
+Caseflow reads the same `<stem>.in<ID>` files as [`run.sh`](run.sh), so existing
+cases require no migration. The legacy script remains unchanged as a parity
+reference.
+
+## Safety and process behavior
+
+- Child programs run in their own process groups.
+- Ctrl-C targets the full child process group, then escalates to SIGTERM and
+  SIGKILL if necessary.
+- Timeouts stop descendants rather than only the immediate child.
+- Explicit output files use same-directory temporary files and atomic rename.
+- Failed programs do not replace an existing explicit output file.
+- Concurrent case writers use file locking.
+- External-editor changes are staged and committed only after success.
+- Destructive interactive actions require confirmation; scripted deletion
+  requires `--force`.
+- Mouse tracking, raw mode, cursor visibility, scroll regions, and the alternate
+  screen are restored on every handled exit path.
+- Competitive Companion listens only on local loopback interfaces and only
+  while an import command is active.
+
+## Exit statuses
+
+| Status | Meaning |
+| --- | --- |
+| `0` | Successful operation or all judged cases passed. |
+| `1` | Output mismatch, stress mismatch, missing doctor dependency, or general failure. |
+| `2` | Invalid command, option, selector, or configuration. |
+| `124` | Execution or listener wait timed out. |
+| `130` | Interrupted with Ctrl-C. |
+| Other | Compiler or child-program exit status, normalized to the shell range. |
+
+For a mixed test selection, any judged mismatch or abnormal execution makes
+the overall command fail even though later cases may still run.
+
+## Troubleshooting
+
+### A compiler or runtime is not found
+
+Run:
+
+```sh
+run-cli doctor
+```
+
+Install the missing tool, set its environment variable, or configure its path
+under `[toolchains]`.
+
+### Clipboard commands fail
+
+Install `wl-clipboard` on Wayland or `xclip` on X11. `run-cli doctor` shows which
+backend Caseflow detects. A failed clipboard read never modifies saved cases.
+
+### A correct-looking answer receives FAIL
+
+Automatic judging is byte-for-byte. Check trailing spaces, blank lines, and the
+final newline:
+
+```sh
+run-cli compare A.cpp 1 A.out1
+```
+
+The explicit compare command prints a unified diff when possible.
+
+### Live output is suppressed
+
+The interactive safety limiter detected excessive output. Press Ctrl-C if the
+program is looping. To preserve the complete output of a finite program:
+
+```sh
+run-cli run A.cpp --input A.in1 --output full.out
+```
+
+### Competitive Companion times out
+
+- Start `/companion` before clicking the extension button.
+- Confirm the extension and Caseflow use the same port.
+- Check whether another process already owns the port.
+- Send a single problem rather than a whole-contest batch.
+- Increase the wait with `--wait 300` if needed.
+
+### Mouse selection captures clicks
+
+Use the toolbar's **Select** action before dragging, or try Shift-drag if your
+terminal supports the selection override. Press Esc to restore Caseflow mouse
+controls.
+
+### Kotlin fails in a sandboxed installation
+
+Some Snap/AppArmor environments prevent `kotlinc` from starting correctly.
+Use a normal Kotlin installation, configure its path with `KOTLINC`, and verify
+it through `run-cli doctor`.
+
+### The terminal was interrupted externally
+
+Caseflow restores the terminal for its handled signals. If the process is
+forcibly killed before cleanup can run, the standard terminal command can
+restore a usable state:
+
+```sh
+reset
+```
 
 ## Development
 
+Run the complete local verification suite:
+
 ```sh
-cargo fmt --check
+cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
+cargo test --all-targets --locked
+cargo build --release --locked
+```
+
+Tests include unit coverage, CLI integration, `run.sh` parity, concurrency,
+signals, clipboard failures, automatic verdicts, and PTY scenarios for the
+full-screen workspace, mouse behavior, live output, resizing, Ctrl-C, and
+terminal restoration.
+
+Create a release archive for the current host:
+
+```sh
 scripts/package-release.sh
 ```
 
-`run.sh` remains unchanged as the compatibility reference during migration.
-CI runs unit, parity, PTY, and all available real-toolchain tests. Its clean
-Ubuntu environment installs Kotlin directly, avoiding the local Snap/AppArmor
-failure that can affect sandboxed `kotlinc` installations.
+Or specify a configured Rust target:
+
+```sh
+scripts/package-release.sh x86_64-unknown-linux-musl
+```
+
+Artifacts and SHA-256 files are written below `dist/`. Tagged releases use the
+GitHub Actions release workflow to package GNU and musl builds.
+
+See [PLAN.md](PLAN.md) for the design and acceptance plan and
+[CHANGELOG.md](CHANGELOG.md) for version history.
+
+## License
+
+Caseflow is available under the [MIT License](LICENSE).
