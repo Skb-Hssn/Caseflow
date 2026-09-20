@@ -21,6 +21,14 @@ struct TerminalGuard;
 
 pub struct ScreenGuard;
 
+/// Temporarily returns an interactive session to the terminal's primary
+/// screen. Dropping the guard restores a fresh alternate screen for the next
+/// workspace render.
+#[must_use = "keep the suspension alive while the child owns the terminal"]
+pub struct ScreenSuspension {
+    resume: bool,
+}
+
 static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 static OUTPUT_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static CAPTURED_STDERR_IS_TERMINAL: AtomicBool = AtomicBool::new(false);
@@ -74,6 +82,40 @@ impl Drop for ScreenGuard {
     }
 }
 
+impl Drop for ScreenSuspension {
+    fn drop(&mut self) {
+        if !self.resume || std::thread::panicking() {
+            return;
+        }
+        let mut stderr = io::stderr();
+        if execute!(stderr, EnterAlternateScreen).is_ok() {
+            ALTERNATE_SCREEN_ACTIVE.store(true, Ordering::Release);
+            let _ = execute!(stderr, Clear(ClearType::All), MoveTo(0, 0), Show);
+        }
+    }
+}
+
+/// Leave run-cli's alternate screen while a terminal-owning child such as an
+/// editor is active. Outside an interactive session this is intentionally a
+/// no-op, allowing the same child-launching code to serve one-shot commands.
+pub fn suspend_screen() -> AppResult<ScreenSuspension> {
+    if !ALTERNATE_SCREEN_ACTIVE.load(Ordering::Acquire) {
+        return Ok(ScreenSuspension { resume: false });
+    }
+
+    restore_terminal();
+    execute!(
+        io::stderr(),
+        Print("\x1b[r"),
+        Show,
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        LeaveAlternateScreen
+    )?;
+    ALTERNATE_SCREEN_ACTIVE.store(false, Ordering::Release);
+    Ok(ScreenSuspension { resume: true })
+}
+
 pub fn restore_terminal() {
     let mut stderr = io::stderr();
     let _ = execute!(
@@ -92,7 +134,7 @@ pub fn restore_terminal_and_screen() {
 
 fn restore_screen() {
     if ALTERNATE_SCREEN_ACTIVE.swap(false, Ordering::AcqRel) {
-        let _ = execute!(io::stderr(), LeaveAlternateScreen, Show);
+        let _ = execute!(io::stderr(), Print("\x1b[r"), LeaveAlternateScreen, Show);
     }
 }
 

@@ -33,7 +33,7 @@ run-cli A.cpp
 ```
 
 Interactive sessions use the terminal's alternate screen, like Vim. Exiting
-with `/quit` or Ctrl-D restores the previous terminal contents. Terminal state
+with `/exit` or Ctrl-D restores the previous terminal contents. Terminal state
 is also restored after handled signals, errors, and panics. One-shot commands
 continue to print in the normal terminal.
 
@@ -49,22 +49,37 @@ select. Inside a session:
 
 ```text
 /run
-/run interactive
 /run clipboard
 /run --input sample.in --output answer.out
 /run --save
-/mode debug
+/debug
+/debug on
 /build
-/test all
-/test 1,3
+/test                       # all saved cases
+/test 1 3
+/test last
 /case list
-/case paste next --run     # equivalent to /run clipboard
-/diff 1 expected.out
-/stress brute.cpp generator.py --limit 500 --timeout 2
-/source B.cpp
+/case add                   # create the next case in an external editor
+/case edit 2                # edit an existing case
+/case paste --run
+/compare 1 expected.out
+/stress brute.cpp generator.py --runs 500 --timeout 2
+/open B.cpp
+/again
+/clear
 /status
-/quit
+/exit
 ```
+
+`/run` uses interactive terminal input. `/run clipboard` reads the clipboard,
+stores it as the next case ID, and runs that saved case. `/test` runs all saved
+cases by default; use `last` or one or more space- or comma-separated IDs to
+narrow the selection. `/again` repeats the most recent run or test, while
+`/clear` clears the retained output viewport.
+
+`/debug` toggles debug mode. The explicit forms `/debug on`, `/debug off`, and
+`/debug toggle` are useful in history and scripts. `/open` switches the active
+source and opens the source picker when its path is omitted.
 
 Typing `/` opens a dimmed command menu immediately; continue typing to filter
 it or press Tab to insert the highlighted full command. Options and files also
@@ -94,41 +109,47 @@ and `A` tests all saved cases.
 
 ```sh
 # Interactive or piped stdin
-run-cli exec A.cpp
-printf '2 3\n' | run-cli exec A.cpp
+run-cli run A.cpp
+printf '2 3\n' | run-cli run A.cpp
+
+# Save clipboard input as the next case, then run it
+run-cli run A.cpp --clipboard
 
 # Named input and atomic output
-run-cli exec A.cpp --input sample.in --output answer.out
+run-cli run A.cpp --input sample.in --output answer.out
 
 # Batch input/output pairs
-run-cli exec A.cpp \
+run-cli run A.cpp \
   --input first.in --output first.out \
   --input second.in --output second.out
 
 # Build modes
 run-cli build A.cpp
 run-cli build A.cpp --debug
-run-cli exec A.cpp --debug --timeout 2
+run-cli run A.cpp --debug --timeout 2
 
 # Saved cases
-run-cli test A.cpp --all
-run-cli test A.cpp --id 1,3
-run-cli test A.cpp --last
+run-cli test A.cpp
+run-cli test A.cpp 1 3
+run-cli test A.cpp last
 run-cli case list A.cpp
 run-cli case show A.cpp 1
 run-cli case copy A.cpp 1
-run-cli case paste A.cpp --next --run
+run-cli case add A.cpp
+run-cli case edit A.cpp 2
+run-cli case paste A.cpp --run
+run-cli case paste A.cpp 2
 run-cli case delete A.cpp 1 --force
 run-cli case clear A.cpp --force
 
 # Compare and stress
-run-cli diff A.cpp 1 expected.out
-run-cli stress A.cpp --brute brute.cpp --generator generator.py
+run-cli compare A.cpp 1 expected.out
+run-cli stress A.cpp brute.cpp generator.py --runs 500
 
 # Shell completion
-run-cli completions zsh > ~/.zfunc/_run-cli
-run-cli completions bash > ~/.local/share/bash-completion/completions/run-cli
-run-cli completions fish > ~/.config/fish/completions/run-cli.fish
+run-cli completion zsh > ~/.zfunc/_run-cli
+run-cli completion bash > ~/.local/share/bash-completion/completions/run-cli
+run-cli completion fish > ~/.config/fish/completions/run-cli.fish
 ```
 
 Bash, Zsh, and Fish integrations call the same parser-aware filtering and
@@ -150,13 +171,33 @@ A.in2
 
 - IDs are positive integers.
 - A new case uses `max(existing ID) + 1`; gaps are not renumbered or reused.
-- `--last` selects the newest modification time, breaking ties with the highest ID.
+- `last` selects the newest modification time, breaking ties with the highest ID
+  (the legacy `--last` spelling remains accepted).
 - Concurrent writers use a shared file lock.
 - Clipboard access prefers `wl-copy`/`wl-paste`, then `xclip`.
 - In the REPL, `/run clipboard` is the short form of saving the clipboard as
   the next case and immediately running it.
+- `/case add` creates the next case and `/case edit ID` updates an existing
+  case using `$VISUAL`, `$EDITOR`, `nvim`, or `vim`, in that order. A failed or
+  cancelled editor leaves saved cases unchanged.
 
 Interactive deletion asks for confirmation. One-shot deletion and clearing require `--force`.
+
+## Compatibility aliases
+
+Existing scripts continue to work while help and completion advertise the
+shorter canonical vocabulary:
+
+- `run-cli exec` is an alias for `run-cli run`, and `run-cli diff` is an alias
+  for `run-cli compare`.
+- `/source` aliases `/open`; `/mode debug` and `/mode standard` alias
+  `/debug on` and `/debug off`.
+- `/diff` aliases `/compare`.
+- `/quit` aliases `/exit`.
+- Legacy test flags `--all`, `--last`, and `--id`, clipboard targets `next`,
+  `--next`, and `--id`, and stress flags `--brute`, `--generator`, and
+  `--limit` remain accepted.
+- `run-cli completions` remains an alias for `run-cli completion`.
 
 ## Configuration
 

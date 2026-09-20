@@ -28,7 +28,7 @@ fn main() {
     let globals = GlobalOptions {
         color: cli.color,
         mouse: cli.mouse,
-        mode: None,
+        mode: cli.debug.then_some(model::BuildMode::Debug),
     };
     let result = match cli.command {
         Some(command) => commands::execute(command, globals),
@@ -50,7 +50,7 @@ fn main() {
 fn open_session(source: Option<std::path::PathBuf>, globals: GlobalOptions) -> AppResult<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(AppError::usage(
-            "interactive mode requires a terminal; use 'run-cli exec SOURCE' for scripts",
+            "interactive mode requires a terminal; use 'run-cli run SOURCE' for scripts",
         ));
     }
     let _screen = terminal::ScreenGuard::enter()?;

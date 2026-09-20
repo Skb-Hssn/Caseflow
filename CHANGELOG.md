@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-20
+
+### Added
+
+- Added `/case add` and `/case edit` workflows for creating and updating saved
+  inputs in an external editor without losing run-cli's terminal state.
+- Added `/again` for repeating the latest run or test and `/clear` for clearing
+  the retained output viewport.
+
+### Changed
+
+- Simplified the public vocabulary around `run`, `compare`, `/open`, and
+  `/debug`, while retaining the former command spellings as compatibility
+  aliases.
+- Made bare `test` run every saved case and accepted positional case IDs,
+  simplified clipboard case targets, and changed stress testing to positional
+  helper sources with `--runs`.
+
 ## [0.4.7] - 2026-09-20
 
 ### Changed

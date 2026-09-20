@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tempfile::TempDir;
@@ -43,6 +44,190 @@ fn tool_exists(tool: &str) -> bool {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+}
+
+#[test]
+fn canonical_run_and_legacy_exec_are_equivalent() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("sum.py");
+    let input = directory.path().join("numbers.in");
+    let canonical_output = directory.path().join("canonical.out");
+    let legacy_output = directory.path().join("legacy.out");
+    fs::copy(fixture("sum.py"), &source).unwrap();
+    fs::write(&input, "20 22\n").unwrap();
+
+    for (subcommand, output) in [("run", &canonical_output), ("exec", &legacy_output)] {
+        let result = command(&directory)
+            .arg(subcommand)
+            .arg(&source)
+            .arg("--input")
+            .arg(&input)
+            .arg("--output")
+            .arg(output)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{subcommand} failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    assert_eq!(fs::read(&canonical_output).unwrap(), b"42\n");
+    assert_eq!(
+        fs::read(&canonical_output).unwrap(),
+        fs::read(&legacy_output).unwrap()
+    );
+}
+
+#[test]
+fn canonical_test_selectors_cover_all_ids_commas_and_last() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("echo.py");
+    fs::write(&source, "print(input().strip())\n").unwrap();
+    for (id, value) in [(1, "one\n"), (2, "two\n"), (3, "three\n")] {
+        fs::write(directory.path().join(format!("echo.in{id}")), value).unwrap();
+    }
+
+    for (selectors, expected) in [
+        (Vec::<&str>::new(), "one\ntwo\nthree\n"),
+        (vec!["1", "3"], "one\nthree\n"),
+        (vec!["1,2"], "one\ntwo\n"),
+        (vec!["last"], "three\n"),
+    ] {
+        let mut run = command(&directory);
+        run.arg("test").arg(&source).args(&selectors);
+        let output = run.output().unwrap();
+        assert!(
+            output.status.success(),
+            "selectors {selectors:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+    }
+}
+
+#[test]
+fn canonical_compare_and_legacy_diff_are_equivalent() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("main.py");
+    let expected = directory.path().join("expected.out");
+    fs::write(&source, "print(input().strip())\n").unwrap();
+    fs::write(directory.path().join("main.in1"), "same\n").unwrap();
+    fs::write(&expected, "same\n").unwrap();
+
+    for subcommand in ["compare", "diff"] {
+        let output = command(&directory)
+            .arg(subcommand)
+            .arg(&source)
+            .arg("1")
+            .arg(&expected)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{subcommand} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn canonical_and_legacy_stress_syntax_both_work() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("main.py");
+    let brute = directory.path().join("brute.py");
+    let generator = directory.path().join("generator.py");
+    fs::write(&source, "print(int(input()))\n").unwrap();
+    fs::write(&brute, "print(int(input()))\n").unwrap();
+    fs::write(&generator, "import sys\nprint(sys.argv[1])\n").unwrap();
+
+    let canonical = command(&directory)
+        .arg("stress")
+        .arg(&source)
+        .arg(&brute)
+        .arg(&generator)
+        .arg("--runs")
+        .arg("2")
+        .arg("--timeout")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert!(
+        canonical.status.success(),
+        "canonical stress failed: {}",
+        String::from_utf8_lossy(&canonical.stderr)
+    );
+
+    let legacy = command(&directory)
+        .arg("stress")
+        .arg(&source)
+        .arg("--brute")
+        .arg(&brute)
+        .arg("--generator")
+        .arg(&generator)
+        .arg("--limit")
+        .arg("2")
+        .arg("--timeout")
+        .arg("1")
+        .output()
+        .unwrap();
+    assert!(
+        legacy.status.success(),
+        "legacy stress failed: {}",
+        String::from_utf8_lossy(&legacy.stderr)
+    );
+}
+
+#[test]
+fn clipboard_run_and_bare_case_paste_append_cases() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("sum.py");
+    fs::copy(fixture("sum.py"), &source).unwrap();
+    let bin = directory.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let clipboard = bin.join("wl-paste");
+    fs::write(&clipboard, "#!/bin/sh\nprintf '2 3\\n'\n").unwrap();
+    fs::set_permissions(&clipboard, fs::Permissions::from_mode(0o755)).unwrap();
+    let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&inherited_path)))
+            .unwrap();
+
+    let run = command(&directory)
+        .env("PATH", &path)
+        .arg("run")
+        .arg(&source)
+        .arg("--clipboard")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "clipboard run failed: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"5\n");
+
+    let paste = command(&directory)
+        .env("PATH", &path)
+        .arg("case")
+        .arg("paste")
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(
+        paste.status.success(),
+        "bare paste failed: {}",
+        String::from_utf8_lossy(&paste.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("sum.in1")).unwrap(),
+        "2 3\n"
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("sum.in2")).unwrap(),
+        "2 3\n"
+    );
 }
 
 #[test]

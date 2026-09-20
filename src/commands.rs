@@ -1,8 +1,8 @@
 use crate::build;
 use crate::cases;
 use crate::cli::{
-    BuildArgs, CaseArgs, CaseCommand, ColorArg, Command as CliCommand, CompleteArgs, DiffArgs,
-    ExecArgs, StressArgs, TestArgs,
+    BuildArgs, CaseArgs, CaseCommand, ColorArg, Command as CliCommand, CompareArgs, CompleteArgs,
+    RunArgs, StressArgs, TestArgs,
 };
 use crate::config::{parse_duration, ColorPolicy, Config};
 use crate::error::{AppError, AppResult};
@@ -46,14 +46,14 @@ pub fn configured(source: Option<&Path>, globals: GlobalOptions) -> AppResult<(C
 
 pub fn execute(command: CliCommand, globals: GlobalOptions) -> AppResult<i32> {
     match command {
-        CliCommand::Exec(args) => execute_exec(args, globals),
+        CliCommand::Run(args) => execute_run(args, globals),
         CliCommand::Build(args) => execute_build(args, globals),
         CliCommand::Test(args) => execute_test(args, globals),
         CliCommand::Case(args) => execute_case(args, globals),
-        CliCommand::Diff(args) => execute_diff(args, globals),
+        CliCommand::Compare(args) => execute_compare(args, globals),
         CliCommand::Stress(args) => execute_stress(args, globals),
         CliCommand::Doctor => execute_doctor(globals),
-        CliCommand::Completions(args) => {
+        CliCommand::Completion(args) => {
             generate_completions(args.shell);
             Ok(0)
         }
@@ -120,26 +120,48 @@ fn execute_build(args: BuildArgs, globals: GlobalOptions) -> AppResult<i32> {
             source.path.display()
         )));
     }
-    build::build(&source, mode(args.debug, &config, globals), &config, &ui)?;
+    build::build(&source, mode(&config, globals), &config, &ui)?;
     Ok(0)
 }
 
-fn execute_exec(args: ExecArgs, globals: GlobalOptions) -> AppResult<i32> {
+fn execute_run(args: RunArgs, globals: GlobalOptions) -> AppResult<i32> {
     let source = resolve_source(&args.source).map_err(AppError::new)?;
     let (config, ui) = configured(Some(&source.path), globals)?;
     validate_exec_files(&source.path, &args.inputs, &args.outputs, &config)?;
-    if args.save_input && !args.inputs.is_empty() {
-        return Err(AppError::usage(
-            "--save-input is only valid for interactive or piped stdin",
-        ));
-    }
     let timeout = args
         .timeout
         .map(|value| parse_duration(value, "--timeout"))
         .transpose()
         .map_err(AppError::usage)?
         .or(config.timeout);
-    let product = build::build(&source, mode(args.debug, &config, globals), &config, &ui)?;
+    if args.clipboard {
+        if args.save_input || !args.inputs.is_empty() || !args.outputs.is_empty() {
+            return Err(AppError::usage(
+                "--clipboard cannot be combined with --save, --input, or --output",
+            ));
+        }
+        let saved = cases::paste(&source, None, &config)?;
+        ui.success(format!(
+            "Saved input #{}  {}",
+            saved.id,
+            saved.path.display()
+        ));
+        let mut run_config = config.clone();
+        run_config.timeout = timeout;
+        return run_saved_cases(
+            &source,
+            CaseSelector::Ids(vec![saved.id]),
+            mode(&config, globals),
+            &run_config,
+            &ui,
+        );
+    }
+    if args.save_input && !args.inputs.is_empty() {
+        return Err(AppError::usage(
+            "--save is only valid for interactive or piped stdin",
+        ));
+    }
+    let product = build::build(&source, mode(&config, globals), &config, &ui)?;
 
     if args.inputs.is_empty() {
         let capture = if args.save_input {
@@ -222,24 +244,64 @@ fn execute_exec(args: ExecArgs, globals: GlobalOptions) -> AppResult<i32> {
 }
 
 fn execute_test(args: TestArgs, globals: GlobalOptions) -> AppResult<i32> {
-    let selector = if args.all {
-        CaseSelector::All
-    } else if args.last {
-        CaseSelector::Last
-    } else if !args.ids.is_empty() {
-        CaseSelector::Ids(args.ids)
-    } else {
-        return Err(AppError::usage("choose one of --all, --last, or --id"));
-    };
+    let selector = test_selector(&args)?;
     let source = resolve_source(&args.source).map_err(AppError::new)?;
     let (config, ui) = configured(Some(&source.path), globals)?;
-    run_saved_cases(
-        &source,
-        selector,
-        mode(args.debug, &config, globals),
-        &config,
-        &ui,
-    )
+    run_saved_cases(&source, selector, mode(&config, globals), &config, &ui)
+}
+
+fn test_selector(args: &TestArgs) -> AppResult<CaseSelector> {
+    if args.all {
+        return Ok(CaseSelector::All);
+    }
+    if args.last {
+        return Ok(CaseSelector::Last);
+    }
+    if !args.ids.is_empty() {
+        return Ok(CaseSelector::Ids(args.ids.clone()));
+    }
+    if args.selectors.is_empty() {
+        return Ok(CaseSelector::All);
+    }
+
+    let parts = args
+        .selectors
+        .iter()
+        .flat_map(|selector| selector.split(','))
+        .filter(|selector| !selector.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err(AppError::usage("case selector cannot be empty"));
+    }
+    match parts.as_slice() {
+        ["all"] => return Ok(CaseSelector::All),
+        ["last"] => return Ok(CaseSelector::Last),
+        _ if parts
+            .iter()
+            .any(|selector| matches!(*selector, "all" | "last")) =>
+        {
+            return Err(AppError::usage(
+                "'all' and 'last' cannot be combined with other case selectors",
+            ));
+        }
+        _ => {}
+    }
+
+    let ids = parts
+        .into_iter()
+        .map(|selector| {
+            let id = selector.parse::<u64>().map_err(|_| {
+                AppError::usage(format!(
+                    "invalid case selector '{selector}'; use all, last, or positive IDs"
+                ))
+            })?;
+            if id == 0 {
+                return Err(AppError::usage("case IDs must be positive integers"));
+            }
+            Ok(id)
+        })
+        .collect::<AppResult<Vec<_>>>()?;
+    Ok(CaseSelector::Ids(ids))
 }
 
 pub fn run_saved_cases(
@@ -347,8 +409,9 @@ fn show_captured_output(path: &Path) -> AppResult<()> {
 fn execute_case(args: CaseArgs, globals: GlobalOptions) -> AppResult<i32> {
     let source_path = match &args.command {
         CaseCommand::List(args) => &args.source,
-        CaseCommand::Show(args) | CaseCommand::Copy(args) => &args.source,
+        CaseCommand::Show(args) | CaseCommand::Copy(args) | CaseCommand::Edit(args) => &args.source,
         CaseCommand::Paste(args) => &args.source,
+        CaseCommand::Add(args) => &args.source,
         CaseCommand::Delete(args) => &args.source,
         CaseCommand::Clear(args) => &args.source,
     };
@@ -376,7 +439,21 @@ fn execute_case(args: CaseArgs, globals: GlobalOptions) -> AppResult<i32> {
             Ok(0)
         }
         CaseCommand::Paste(args) => {
-            let saved = cases::paste(&source, args.id, &config)?;
+            let target = match args.target.as_deref() {
+                None | Some("next") => args.id,
+                Some(value) => {
+                    let id = value.parse::<u64>().map_err(|_| {
+                        AppError::usage(format!(
+                            "invalid case target '{value}'; use a positive ID or 'next'"
+                        ))
+                    })?;
+                    if id == 0 {
+                        return Err(AppError::usage("case IDs must be positive integers"));
+                    }
+                    Some(id)
+                }
+            };
+            let saved = cases::paste(&source, target, &config)?;
             ui.success(format!(
                 "Saved input #{}  {}",
                 saved.id,
@@ -386,13 +463,21 @@ fn execute_case(args: CaseArgs, globals: GlobalOptions) -> AppResult<i32> {
                 run_saved_cases(
                     &source,
                     CaseSelector::Ids(vec![saved.id]),
-                    mode(args.debug, &config, globals),
+                    mode(&config, globals),
                     &config,
                     &ui,
                 )
             } else {
                 Ok(0)
             }
+        }
+        CaseCommand::Add(_) => {
+            edit_case_external(&source, None, &config, &ui)?;
+            Ok(0)
+        }
+        CaseCommand::Edit(args) => {
+            edit_case_external(&source, Some(args.id), &config, &ui)?;
+            Ok(0)
         }
         CaseCommand::Delete(args) => {
             if !args.force {
@@ -417,7 +502,34 @@ fn execute_case(args: CaseArgs, globals: GlobalOptions) -> AppResult<i32> {
     }
 }
 
-fn execute_diff(args: DiffArgs, globals: GlobalOptions) -> AppResult<i32> {
+pub fn edit_case_external(
+    source: &crate::model::SourceSpec,
+    id: Option<u64>,
+    config: &Config,
+    ui: &Ui,
+) -> AppResult<()> {
+    let outcome = cases::edit_with_external_editor(source, id, config)?;
+    match outcome {
+        cases::ExternalEditOutcome::Added(saved) => ui.success(format!(
+            "Added input #{}  {}",
+            saved.id,
+            saved.path.display()
+        )),
+        cases::ExternalEditOutcome::Updated(saved) => ui.success(format!(
+            "Updated input #{}  {}",
+            saved.id,
+            saved.path.display()
+        )),
+        cases::ExternalEditOutcome::Unchanged(saved) => ui.info(format!(
+            "Input #{} unchanged  {}",
+            saved.id,
+            saved.path.display()
+        )),
+    }
+    Ok(())
+}
+
+fn execute_compare(args: CompareArgs, globals: GlobalOptions) -> AppResult<i32> {
     let source = resolve_source(&args.source).map_err(AppError::new)?;
     let (config, ui) = configured(Some(&source.path), globals)?;
     let saved = cases::require(&source, args.id)?;
@@ -427,10 +539,10 @@ fn execute_diff(args: DiffArgs, globals: GlobalOptions) -> AppResult<i32> {
             args.expected.display()
         )));
     }
-    let product = build::build(&source, mode(args.debug, &config, globals), &config, &ui)?;
+    let product = build::build(&source, mode(&config, globals), &config, &ui)?;
     let actual = temporary_path(&config, "actual-output")?;
     ui.header(
-        "DIFF",
+        "COMPARE",
         format!("{} · {}", saved.path.display(), args.expected.display()),
     );
     let report = process::run(
@@ -461,13 +573,19 @@ fn execute_diff(args: DiffArgs, globals: GlobalOptions) -> AppResult<i32> {
 }
 
 fn execute_stress(args: StressArgs, globals: GlobalOptions) -> AppResult<i32> {
+    let brute_path = args.brute.or(args.brute_option).ok_or_else(|| {
+        AppError::usage("missing BRUTE source; usage: stress SOURCE BRUTE GENERATOR")
+    })?;
+    let generator_path = args.generator.or(args.generator_option).ok_or_else(|| {
+        AppError::usage("missing GENERATOR source; usage: stress SOURCE BRUTE GENERATOR")
+    })?;
     let source = resolve_source(&args.source).map_err(AppError::new)?;
     let (config, ui) = configured(Some(&source.path), globals)?;
-    let brute = resolve_source(&args.brute).map_err(AppError::new)?;
-    let generator = resolve_source(&args.generator).map_err(AppError::new)?;
-    let limit = args.limit.unwrap_or(config.stress_limit);
+    let brute = resolve_source(&brute_path).map_err(AppError::new)?;
+    let generator = resolve_source(&generator_path).map_err(AppError::new)?;
+    let limit = args.runs.unwrap_or(config.stress_limit);
     if limit == 0 {
-        return Err(AppError::usage("--limit must be a positive integer"));
+        return Err(AppError::usage("--runs must be a positive integer"));
     }
     let timeout = args
         .timeout
@@ -479,7 +597,7 @@ fn execute_stress(args: StressArgs, globals: GlobalOptions) -> AppResult<i32> {
         source,
         brute,
         generator,
-        mode: mode(args.debug, &config, globals),
+        mode: mode(&config, globals),
         limit,
         timeout,
     };
@@ -609,12 +727,8 @@ fn execute_doctor(globals: GlobalOptions) -> AppResult<i32> {
     Ok(if missing == 0 { 0 } else { 1 })
 }
 
-fn mode(debug: bool, config: &Config, globals: GlobalOptions) -> BuildMode {
-    if debug {
-        BuildMode::Debug
-    } else {
-        globals.mode.unwrap_or(config.default_mode)
-    }
+fn mode(config: &Config, globals: GlobalOptions) -> BuildMode {
+    globals.mode.unwrap_or(config.default_mode)
 }
 
 fn validate_exec_files(

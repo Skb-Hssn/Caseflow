@@ -1,10 +1,11 @@
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
 use crate::model::SourceSpec;
+use crate::terminal;
 use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File, OpenOptions};
 use std::hash::{Hash, Hasher};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -19,6 +20,13 @@ pub struct SavedCase {
     pub path: PathBuf,
     pub size: u64,
     pub modified: SystemTime,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExternalEditOutcome {
+    Added(SavedCase),
+    Updated(SavedCase),
+    Unchanged(SavedCase),
 }
 
 pub struct CaseLock {
@@ -249,6 +257,197 @@ pub fn copy(saved: &SavedCase) -> AppResult<()> {
             "clipboard command failed with exit status {}",
             status.code().unwrap_or(1)
         )))
+    }
+}
+
+/// Add a case or edit an existing case through the user's terminal editor.
+///
+/// Edits are staged below the cache directory and are committed atomically
+/// only after the editor exits successfully. An unchanged edit is not
+/// rewritten, preserving its modification time and therefore `last` ordering.
+pub fn edit_with_external_editor(
+    source: &SourceSpec,
+    id: Option<u64>,
+    config: &Config,
+) -> AppResult<ExternalEditOutcome> {
+    let existing = id.map(|id| require(source, id)).transpose()?;
+    let original = existing
+        .as_ref()
+        .map(|saved| {
+            fs::read(&saved.path).map_err(|error| {
+                AppError::new(format!(
+                    "cannot read saved input '{}': {error}",
+                    saved.path.display()
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or_default();
+    let filename = existing
+        .as_ref()
+        .and_then(|saved| saved.path.file_name())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("input.in"));
+    let workspace = EditorWorkspace::create(config, &filename, &original)?;
+    let editor = resolve_editor()?;
+
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() || !io::stderr().is_terminal() {
+        return Err(AppError::new(
+            "case editing requires an interactive terminal on stdin, stdout, and stderr",
+        ));
+    }
+
+    let status = {
+        let _screen = terminal::suspend_screen()?;
+        Command::new(&editor.program)
+            .args(&editor.args)
+            .arg(&workspace.path)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|error| {
+                AppError::new(format!(
+                    "could not start editor '{}': {error}",
+                    editor.program
+                ))
+            })?
+    };
+    if !status.success() {
+        return Err(AppError::new(format!(
+            "editor '{}' exited with status {}",
+            editor.program,
+            status.code().unwrap_or(1)
+        )));
+    }
+
+    let edited = fs::read(&workspace.path).map_err(|error| {
+        AppError::new(format!(
+            "cannot read edited input '{}': {error}",
+            workspace.path.display()
+        ))
+    })?;
+    match existing {
+        Some(saved) => commit_external_edit(source, saved.id, &original, &edited, config),
+        None => {
+            let saved = save_bytes(source, None, &edited, config)?;
+            Ok(ExternalEditOutcome::Added(saved))
+        }
+    }
+}
+
+fn commit_external_edit(
+    source: &SourceSpec,
+    id: u64,
+    original: &[u8],
+    edited: &[u8],
+    config: &Config,
+) -> AppResult<ExternalEditOutcome> {
+    let _lock = lock_cases(source, config)?;
+    let current = require(source, id)?;
+    let current_contents = fs::read(&current.path).map_err(|error| {
+        AppError::new(format!(
+            "cannot re-read saved input '{}': {error}",
+            current.path.display()
+        ))
+    })?;
+    if current_contents != original {
+        return Err(AppError::new(format!(
+            "saved input ID {id} changed while the editor was open; your edit was not applied"
+        )));
+    }
+    if edited == original {
+        return Ok(ExternalEditOutcome::Unchanged(current));
+    }
+    atomic_write(&current.path, edited)?;
+    Ok(ExternalEditOutcome::Updated(require(source, id)?))
+}
+
+struct EditorCommand {
+    program: String,
+    args: Vec<String>,
+}
+
+fn resolve_editor() -> AppResult<EditorCommand> {
+    for variable in ["VISUAL", "EDITOR"] {
+        let Some(value) = std::env::var_os(variable) else {
+            continue;
+        };
+        let value = value.into_string().map_err(|_| {
+            AppError::new(format!(
+                "${variable} contains non-UTF-8 text and cannot be used"
+            ))
+        })?;
+        if value.trim().is_empty() {
+            continue;
+        }
+        let mut words = shell_words::split(&value)
+            .map_err(|error| AppError::new(format!("cannot parse ${variable}: {error}")))?;
+        if words.is_empty() {
+            continue;
+        }
+        return Ok(EditorCommand {
+            program: words.remove(0),
+            args: words,
+        });
+    }
+    for program in ["nvim", "vim"] {
+        if command_exists(program) {
+            return Ok(EditorCommand {
+                program: program.to_string(),
+                args: Vec::new(),
+            });
+        }
+    }
+    Err(AppError::new(
+        "no terminal editor found; set $VISUAL or $EDITOR, or install nvim/vim",
+    ))
+}
+
+struct EditorWorkspace {
+    directory: PathBuf,
+    path: PathBuf,
+}
+
+impl EditorWorkspace {
+    fn create(config: &Config, filename: &Path, contents: &[u8]) -> AppResult<Self> {
+        let root = config.cache_dir.join("tmp");
+        fs::create_dir_all(&root)?;
+        for _ in 0..100 {
+            let count = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let directory = root.join(format!("case-editor-{}-{count}", std::process::id()));
+            match fs::create_dir(&directory) {
+                Ok(()) => {
+                    let workspace = Self {
+                        path: directory.join(filename),
+                        directory,
+                    };
+                    fs::write(&workspace.path, contents).map_err(|error| {
+                        AppError::new(format!(
+                            "cannot stage input for editing '{}': {error}",
+                            workspace.path.display()
+                        ))
+                    })?;
+                    return Ok(workspace);
+                }
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(AppError::new(format!(
+                        "cannot create case editor workspace in '{}': {error}",
+                        root.display()
+                    )));
+                }
+            }
+        }
+        Err(AppError::new(
+            "could not allocate a temporary case editor workspace",
+        ))
+    }
+}
+
+impl Drop for EditorWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
     }
 }
 

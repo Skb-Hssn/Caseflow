@@ -93,6 +93,15 @@ impl PtySession {
         String::from_utf8_lossy(&self.output.lock().unwrap()).into_owned()
     }
 
+    fn output_len(&self) -> usize {
+        self.output.lock().unwrap().len()
+    }
+
+    fn text_since(&self, offset: usize) -> String {
+        let output = self.output.lock().unwrap();
+        String::from_utf8_lossy(&output[offset.min(output.len())..]).into_owned()
+    }
+
     fn wait_for(&self, needle: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
@@ -115,6 +124,30 @@ impl PtySession {
         panic!(
             "PTY output did not contain {expected} copies of {needle:?}:\n{}",
             self.text()
+        );
+    }
+
+    fn wait_for_sequence_since(&self, offset: usize, needles: &[&str]) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let text = self.text_since(offset);
+            let mut remaining = text.as_str();
+            let mut matched = true;
+            for needle in needles {
+                let Some(index) = remaining.find(needle) else {
+                    matched = false;
+                    break;
+                };
+                remaining = &remaining[index + needle.len()..];
+            }
+            if matched {
+                return;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!(
+            "PTY output after byte {offset} did not contain sequence {needles:?}:\n{}",
+            self.text_since(offset)
         );
     }
 
@@ -428,6 +461,245 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     assert!(scrolled_render.contains('↑'));
     assert_eq!(after.matches(&title).count(), header_count);
     assert_eq!(after.matches("[Interactive]").count(), toolbar_count);
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn again_is_recoverable_and_keeps_repeating_the_latest_run() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "from pathlib import Path\n\
+         counter = Path('run-count.txt')\n\
+         count = int(counter.read_text()) + 1 if counter.exists() else 1\n\
+         counter.write_text(str(count))\n\
+         print(f'repeat-run-{count}')\n",
+    );
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+
+    let command_start = session.output_len();
+    session.send(b"/again\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &[
+            "nothing to repeat; run /run or /test first",
+            "run-cli:main.py",
+        ],
+    );
+
+    let command_start = session.output_len();
+    session.send(b"/run\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &["repeat-run-1", "Success (exit 0)", "run-cli:main.py"],
+    );
+
+    // An unrelated command must not replace the repeatable command.
+    let command_start = session.output_len();
+    session.send(b"/status\r");
+    session.wait_for_sequence_since(command_start, &["SESSION", "run-cli:main.py"]);
+    let command_start = session.output_len();
+    session.send(b"/again\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &["repeat-run-2", "Success (exit 0)", "run-cli:main.py"],
+    );
+
+    // `/again` must retain the expanded /run command instead of repeating itself.
+    let command_start = session.output_len();
+    session.send(b"/again\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &["repeat-run-3", "Success (exit 0)", "run-cli:main.py"],
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("run-count.txt")).unwrap(),
+        "3"
+    );
+
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn clear_removes_retained_output_and_the_prompt_remains_usable() {
+    const MARKER: &str = "RETAINED-OUTPUT-MARKER-48271";
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), &format!("print('{MARKER}')\n"));
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+
+    let command_start = session.output_len();
+    session.send(b"/run\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &[MARKER, "Success (exit 0)", "run-cli:main.py"],
+    );
+
+    let clear_offset = session.output_len();
+    session.send(b"/clear\r/help clear\r");
+    let help = "Clear retained output from the viewport.";
+    session.wait_for_sequence_since(clear_offset, &[help, "run-cli:main.py"]);
+    // The first help line is emitted live. The following workspace render would
+    // expose the old marker again if /clear had not removed retained lines.
+    let after_clear = session.text_since(clear_offset);
+    let after_live_help = &after_clear[after_clear.find(help).unwrap() + help.len()..];
+    assert!(
+        !after_live_help.contains(MARKER),
+        "cleared program output was rendered again"
+    );
+
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn canonical_session_controls_work_from_the_keyboard() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+
+    let command_start = session.output_len();
+    session.send(b"/debug on\r");
+    session.wait_for_sequence_since(command_start, &["Build mode: debug", "run-cli:main.py"]);
+    let command_start = session.output_len();
+    session.send(b"/debug off\r");
+    session.wait_for_sequence_since(command_start, &["Build mode: standard", "run-cli:main.py"]);
+    let command_start = session.output_len();
+    session.send(b"/debug\r");
+    session.wait_for_sequence_since(command_start, &["Build mode: debug", "run-cli:main.py"]);
+    let command_start = session.output_len();
+    session.send(b"/debug toggle\r");
+    session.wait_for_sequence_since(command_start, &["Build mode: standard", "run-cli:main.py"]);
+
+    let command_start = session.output_len();
+    session.send(b"/mouse\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &["Mouse controls: on", "[Interactive]", "run-cli:main.py"],
+    );
+    let command_start = session.output_len();
+    session.send(b"/mouse\r");
+    session.wait_for_sequence_since(command_start, &["Mouse controls: off", "run-cli:main.py"]);
+
+    let command_start = session.output_len();
+    session.send(b"/help run\r");
+    session.wait_for_sequence_since(
+        command_start,
+        &["/run clipboard [--timeout SEC]", "run-cli:main.py"],
+    );
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip())\n");
+    let editor_directory = directory.path().join("fake editors");
+    fs::create_dir(&editor_directory).unwrap();
+    let editor = editor_directory.join("fake visual.sh");
+    let editor_state = directory.path().join("editor state");
+    fs::write(
+        &editor,
+        "#!/bin/sh\n\
+         set -eu\n\
+         test \"$1\" = --label\n\
+         test \"$2\" = 'quoted argument'\n\
+         label=$2\n\
+         shift 2\n\
+         test -t 0 && test -t 1 && test -t 2 || exit 91\n\
+         count=0\n\
+         test ! -f \"$EDITOR_STATE\" || count=$(cat \"$EDITOR_STATE\")\n\
+         count=$((count + 1))\n\
+         printf '%s\\n' \"$count\" > \"$EDITOR_STATE\"\n\
+         printf 'EDITOR_TTY_OK:%s:%s\\n' \"$count\" \"$label\"\n\
+         case \"$count\" in\n\
+           1) printf 'added through editor\\n' > \"$1\" ;;\n\
+           2) printf 'edited through editor\\n' > \"$1\" ;;\n\
+           *) printf 'must not be committed\\n' > \"$1\"; exit 23 ;;\n\
+         esac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut command = repl_command(&directory, &source, false);
+    command.env(
+        "VISUAL",
+        format!("\"{}\" --label \"quoted argument\"", editor.display()),
+    );
+    command.env("EDITOR", "/definitely/not/the/editor");
+    command.env("EDITOR_STATE", &editor_state);
+    let session = PtySession::spawn(command);
+    session.wait_for("run-cli:main.py");
+    let initial_prompt_count = session.text().matches("run-cli:main.py").count();
+
+    session.send(b"/case add\r");
+    session.wait_for("EDITOR_TTY_OK:1:quoted argument");
+    session.wait_for("Added input #1");
+    session.wait_for_count("run-cli:main.py", initial_prompt_count + 1);
+    assert_eq!(
+        fs::read_to_string(directory.path().join("main.in1")).unwrap(),
+        "added through editor\n"
+    );
+
+    session.send(b"/case edit 1\r");
+    session.wait_for("EDITOR_TTY_OK:2:quoted argument");
+    session.wait_for("Updated input #1");
+    session.wait_for_count("run-cli:main.py", initial_prompt_count + 2);
+    assert_eq!(
+        fs::read_to_string(directory.path().join("main.in1")).unwrap(),
+        "edited through editor\n"
+    );
+
+    session.send(b"/case edit 1\r");
+    session.wait_for("EDITOR_TTY_OK:3:quoted argument");
+    session.wait_for("exited with status 23");
+    session.wait_for_count("run-cli:main.py", initial_prompt_count + 3);
+    assert_eq!(
+        fs::read_to_string(directory.path().join("main.in1")).unwrap(),
+        "edited through editor\n",
+        "a failed editor must not replace the saved case"
+    );
+    let temporary_root = directory.path().join("cache/run-cli/tmp");
+    assert!(
+        fs::read_dir(&temporary_root).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("case-editor-")),
+        "editor staging directories should be removed after success and failure"
+    );
+
+    let output = session.text();
+    let initial_enter = output.find("\x1b[?1049h").unwrap();
+    let first_leave = output[initial_enter + 1..]
+        .find("\x1b[?1049l")
+        .map(|offset| initial_enter + 1 + offset)
+        .expect("run-cli should leave its alternate screen for the editor");
+    let editor_marker = output[first_leave..]
+        .find("EDITOR_TTY_OK:1:quoted argument")
+        .map(|offset| first_leave + offset)
+        .unwrap();
+    let resumed = output[editor_marker..]
+        .find("\x1b[?1049h")
+        .map(|offset| editor_marker + offset)
+        .expect("run-cli should restore its alternate screen after the editor");
+    assert!(first_leave < editor_marker && editor_marker < resumed);
+    assert_eq!(
+        output.matches("\x1b[?1049l").count(),
+        3,
+        "each editor invocation should suspend the workspace once"
+    );
+    assert_eq!(
+        output.matches("\x1b[?1049h").count(),
+        4,
+        "the initial workspace and all three resumptions should enter once"
+    );
+
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }

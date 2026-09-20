@@ -194,6 +194,11 @@ impl LineEditor {
         self.append_captured_output(output, &[]);
     }
 
+    pub fn clear_output(&mut self) {
+        self.output_lines.clear();
+        self.scroll_offset = 0;
+    }
+
     pub fn append_captured_output(&mut self, output: &[u8], input: &[u8]) {
         let text = strip_terminal_sequences(&String::from_utf8_lossy(output));
         let mut lines = text

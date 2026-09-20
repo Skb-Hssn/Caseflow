@@ -22,22 +22,30 @@ The interaction borrows the documented Codex CLI pattern of an interactive proje
 
 ### REPL commands
 
-- `/source [PATH]`: select or switch the active source.
-- `/run [--timeout SEC] [--save] [--input FILE ...] [--output FILE ...]`: build when applicable and execute.
+- `/open [PATH]`: select or switch the active source; open the picker when PATH is omitted.
+- `/run [--timeout SEC] [--save] [--input FILE ...] [--output FILE ...]`: build when applicable and execute with terminal input.
+- `/run clipboard`: save clipboard input as the next case and run it.
 - `/build [--debug]`: compile without running; reject Python clearly.
-- `/mode standard|debug`: set the session build mode.
-- `/test all|last|ID[,ID...]`: run saved cases, compiling once for the group.
+- `/debug [on|off|toggle]`: set or toggle the session build mode; the bare command toggles.
+- `/test [all|last|ID ...]`: run all saved cases by default, or run selected space- or comma-separated IDs, compiling once for the group.
 - `/case list|show|copy|delete|clear`: manage compatible `.in<ID>` files.
-- `/case paste 1|next [--run]`: atomically paste clipboard data, optionally execute it.
-- `/diff ID EXPECTED`: run a saved case and byte-compare its output.
-- `/stress BRUTE GENERATOR [--limit N] [--timeout SEC]`: differential stress testing.
-- `/status`, `/doctor`, `/help`, and `/quit`.
+- `/case add` and `/case edit ID`: create or edit saved input through `$VISUAL`, `$EDITOR`, `nvim`, or `vim` while preserving terminal state.
+- `/case paste [ID] [--run]`: atomically append clipboard data by default, replace ID when provided, and optionally execute it.
+- `/compare ID EXPECTED`: run a saved case and byte-compare its output.
+- `/stress BRUTE GENERATOR [--runs N] [--timeout SEC]`: differential stress testing.
+- `/again`: repeat the most recent run or test operation.
+- `/clear`: clear retained output from the session viewport.
+- `/status`, `/doctor`, `/help [COMMAND]`, and `/exit`.
+
+Compatibility aliases remain parseable but are omitted from primary help and
+completion: `/source`, `/mode standard|debug`, `/diff`, and `/quit`; legacy case-paste
+targets and test/stress options also remain accepted.
 
 The prompt displays the active source, language, and build mode. Ctrl-C cancels an active child process and returns to the prompt; Ctrl-D exits an idle session.
 
 ### Context-aware file suggestions
 
-- The REPL shows a selectable suggestion menu whenever the cursor is at a path argument, including `/source`, `/run --input`, `/run --output`, `/diff`, and both `/stress` source arguments. Tab completes the selected path; arrow keys move through candidates.
+- The REPL shows a selectable suggestion menu whenever the cursor is at a path argument, including `/open`, `/run --input`, `/run --output`, `/compare`, and both `/stress` source arguments. Tab completes the selected path; arrow keys move through candidates.
 - Source positions prioritize supported source extensions. Input positions prioritize saved `.in<ID>` cases and common `.in`/`.txt` files. Expected-output positions prioritize `.out`, `.ans`, and `.txt` files.
 - Output positions suggest directories and existing output-like files, while excluding the active source, selected inputs, duplicate outputs, and internal artifacts. Existing destinations are visibly marked as replacements and still pass the normal overwrite-safety checks.
 - Suggestions support relative and absolute paths, `~`, nested-directory traversal, quoted paths containing spaces, and trailing `/` for directories. Hidden files appear only after the user types a leading `.`.
@@ -55,14 +63,18 @@ The prompt displays the active source, language, and build mode. Ctrl-C cancels 
 
 ### One-shot commands
 
-- `run-cli exec SOURCE` with repeatable `--input`/`--output`, plus `--debug`, `--timeout`, and `--save-input`.
+- `run-cli run SOURCE` with repeatable `--input`/`--output`, plus `--clipboard`, `--debug`, `--timeout`, and `--save`.
 - `run-cli build SOURCE [--debug]`.
-- `run-cli test SOURCE --all|--last|--id IDS [--debug]`.
-- `run-cli case list|show|copy|paste|delete|clear SOURCE`.
-- `run-cli diff SOURCE ID EXPECTED [--debug]`.
-- `run-cli stress SOURCE --brute SOURCE --generator SOURCE [--limit N] [--timeout SEC]`.
-- `run-cli doctor` and `run-cli completions SHELL`.
+- `run-cli test SOURCE [all|last|ID ...] [--debug]`, with all cases selected by default.
+- `run-cli case list|show|copy|paste|add|edit|delete|clear SOURCE`.
+- `run-cli compare SOURCE ID EXPECTED [--debug]`.
+- `run-cli stress SOURCE BRUTE GENERATOR [--runs N] [--timeout SEC]`.
+- `run-cli doctor` and `run-cli completion SHELL`.
 - Global `--color auto|always|never` and `--mouse`; `NO_COLOR` always wins, and mouse mode is never enabled for non-interactive output.
+
+The prior one-shot spellings remain compatibility aliases: `exec` for `run`,
+`diff` for `compare`, `completions` for `completion`, test selector flags,
+case-paste `next`/`--next`/`--id`, and stress helper flags plus `--limit`.
 
 Decorative UI appears only on terminals. In pipelines, child stdout stays clean and runner diagnostics/resource reports go to stderr. Runtime exit codes propagate, timeout returns 124, Ctrl-C returns 130, argument/configuration errors return 2, and comparison/stress mismatches return 1.
 
@@ -83,6 +95,7 @@ Decorative UI appears only on terminals. In pipelines, child stdout stays clean 
 - Execute children in their own process group. Timeouts terminate the whole group, wait one second, then force-kill it. Report status, wall time, user/system CPU, CPU percentage, and peak RSS.
 - Preserve case semantics exactly: positive numeric IDs, `next = max + 1`, no renumbering, newest mtime for `last` with highest ID as tie-breaker, and cases shared by source stem across languages.
 - Use cross-process locks and same-directory temporary files plus atomic rename for case writes and output files. Failed clipboard reads or program runs leave existing files unchanged.
+- Suspend run-cli's terminal guards while an external case editor owns the terminal, then restore the alternate screen, fixed layout, mouse mode, and viewport after it exits. A failed editor must not create or replace a case.
 - Reject outputs that would overwrite a source, input, another output, or internal build artifact. Continue later batch inputs after a failure and return the final nonzero status.
 - Preserve byte-for-byte diff/stress comparison. The generator receives the 1-based case number; the first mismatch or abnormal exit saves the failing input as the next case and prints a unified diff.
 - Prefer `wl-copy`/`wl-paste`, then `xclip`; `/doctor` reports missing compilers, runtimes, and clipboard utilities.
