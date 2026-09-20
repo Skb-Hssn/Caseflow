@@ -1057,6 +1057,16 @@ fn draw_output_line(
                 SetForegroundColor(theme::PRIMARY),
                 SetAttribute(Attribute::Bold)
             )?;
+        } else if trimmed.starts_with("System status") {
+            queue!(
+                output,
+                SetForegroundColor(if trimmed.contains('✗') {
+                    theme::DANGER
+                } else {
+                    theme::SUCCESS
+                }),
+                SetAttribute(Attribute::Dim)
+            )?;
         } else if trimmed.starts_with('✓') || trimmed.starts_with("Success (exit") {
             queue!(output, SetForegroundColor(theme::SUCCESS))?;
         } else if trimmed.starts_with('✗') || trimmed.starts_with("Failed (exit") {
@@ -1066,8 +1076,20 @@ fn draw_output_line(
         } else if trimmed == "Input" || trimmed == "Output" {
             queue!(
                 output,
-                SetForegroundColor(theme::PRIMARY_SOFT),
+                SetForegroundColor(theme::ACCENT_ORANGE),
                 SetAttribute(Attribute::Bold)
+            )?;
+        } else if line.starts_with("━━ File") {
+            queue!(
+                output,
+                SetForegroundColor(theme::MUTED),
+                SetAttribute(Attribute::Bold)
+            )?;
+        } else if !trimmed.is_empty() && trimmed.chars().all(|character| character == '─') {
+            queue!(
+                output,
+                SetForegroundColor(theme::MUTED),
+                SetAttribute(Attribute::Dim)
             )?;
         } else if line.starts_with("━━ ") {
             queue!(

@@ -34,7 +34,9 @@ impl Ui {
             return;
         }
         let detail = detail.as_ref();
-        let color = if self.color {
+        let color = if self.color && title == "File" {
+            theme::ANSI_MUTED_BOLD
+        } else if self.color {
             theme::ANSI_PRIMARY_BOLD
         } else {
             ""
@@ -105,7 +107,12 @@ impl Ui {
 
     pub fn section_title(&self, title: &str) {
         if self.color {
-            eprintln!("{}{}{}", theme::ANSI_PRIMARY_BOLD, title, theme::ANSI_RESET);
+            let color = if matches!(title, "Input" | "Output") {
+                theme::ANSI_ACCENT_ORANGE_BOLD
+            } else {
+                theme::ANSI_PRIMARY_BOLD
+            };
+            eprintln!("{color}{title}{}", theme::ANSI_RESET);
         } else {
             eprintln!("{title}");
         }
@@ -119,40 +126,55 @@ impl Ui {
             } else {
                 eprintln!("{}", "─".repeat(width));
             }
-            self.section_title("System status");
+            let summary = report_summary(report);
+            if self.color {
+                let color = if report.timed_out || report.exit_code != 0 {
+                    theme::ANSI_DANGER_DIM
+                } else {
+                    theme::ANSI_SUCCESS_DIM
+                };
+                eprintln!("{color}System status  ·  {summary}{}", theme::ANSI_RESET);
+            } else {
+                eprintln!("System status  ·  {summary}");
+            }
+        } else {
+            self.report(report);
         }
-        self.report(report);
         if self.interactive {
             eprintln!();
         }
     }
 
     pub fn report(&self, report: &RunReport) {
-        let cpu_seconds = report.user_time.as_secs_f64() + report.system_time.as_secs_f64();
-        let cpu = if report.wall_time.is_zero() {
-            0.0
-        } else {
-            cpu_seconds / report.wall_time.as_secs_f64() * 100.0
-        };
-        let status = if report.timed_out {
-            "Timed out".to_string()
-        } else if report.exit_code == 0 {
-            "Success (exit 0)".to_string()
-        } else {
-            format!("Failed (exit {})", report.exit_code)
-        };
-        let marker = if report.timed_out || report.exit_code != 0 {
-            "✗"
-        } else {
-            "✓"
-        };
-        eprintln!(
-            "  {marker} {status}  ·  {:.3}s  ·  CPU {:.0}%  ·  {}",
-            report.wall_time.as_secs_f64(),
-            cpu,
-            format_memory(report.peak_memory_kib)
-        );
+        eprintln!("  {}", report_summary(report));
     }
+}
+
+fn report_summary(report: &RunReport) -> String {
+    let cpu_seconds = report.user_time.as_secs_f64() + report.system_time.as_secs_f64();
+    let cpu = if report.wall_time.is_zero() {
+        0.0
+    } else {
+        cpu_seconds / report.wall_time.as_secs_f64() * 100.0
+    };
+    let status = if report.timed_out {
+        "Timed out".to_string()
+    } else if report.exit_code == 0 {
+        "Success (exit 0)".to_string()
+    } else {
+        format!("Failed (exit {})", report.exit_code)
+    };
+    let marker = if report.timed_out || report.exit_code != 0 {
+        "✗"
+    } else {
+        "✓"
+    };
+    format!(
+        "{marker} {status}  ·  {:.3}s  ·  CPU {:.0}%  ·  {}",
+        report.wall_time.as_secs_f64(),
+        cpu,
+        format_memory(report.peak_memory_kib)
+    )
 }
 
 fn format_memory(kib: i64) -> String {
@@ -195,10 +217,27 @@ fn truncate_width(value: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn formats_memory_units() {
         assert_eq!(format_memory(512), "512 KiB");
         assert_eq!(format_memory(1536), "1.5 MiB");
+    }
+
+    #[test]
+    fn report_summary_is_compact_and_single_line() {
+        let report = RunReport {
+            exit_code: 0,
+            wall_time: Duration::from_millis(10),
+            user_time: Duration::from_millis(2),
+            system_time: Duration::from_millis(1),
+            peak_memory_kib: 4096,
+            timed_out: false,
+        };
+        let summary = report_summary(&report);
+        assert!(summary.starts_with("✓ Success (exit 0)  ·  0.010s"));
+        assert!(summary.ends_with("4.0 MiB"));
+        assert!(!summary.contains('\n'));
     }
 }

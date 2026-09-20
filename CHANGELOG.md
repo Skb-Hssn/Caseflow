@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-20
+
+### Changed
+
+- Restyled saved-case output with a grey file heading, orange Input and Output
+  labels, a dim grey divider, and a compact one-line dim status summary.
+
 ## [0.5.0] - 2026-09-20
 
 ### Added

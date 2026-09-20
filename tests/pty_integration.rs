@@ -376,8 +376,7 @@ fn clipboard_run_alias_saves_and_runs_the_next_case() {
     session.send(b"\r");
     session.wait_for("Saved input #1");
     session.wait_for("File ·");
-    session.wait_for("System status");
-    session.wait_for("Success (exit 0)");
+    session.wait_for("System status  ·  ✓ Success (exit 0)");
     session.wait_for_count("run-cli:main.py", prompt_count + 1);
     session.send(b"/quit\r");
     assert!(session.wait().success());
