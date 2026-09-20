@@ -4,8 +4,7 @@ use crate::terminal as terminal_state;
 use crate::theme;
 use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers, MouseButton, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
 use crossterm::style::{
     Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
@@ -164,27 +163,32 @@ impl LineEditor {
         let mut draft = String::new();
         let mut mouse_capture = false;
         let mut render_state = RenderState::default();
+        let mut layout = Layout::default();
+        let mut redraw = true;
 
         loop {
-            let layout = render(
-                prompt,
-                &buffer,
-                cursor,
-                menu.as_mut(),
-                &mut anchor_row,
-                RenderOptions {
-                    show_toolbar: self.mouse,
-                    color: self.color,
-                    case_ids: &self.case_ids,
-                },
-                &mut render_state,
-            )?;
+            if redraw {
+                layout = render(
+                    prompt,
+                    &buffer,
+                    cursor,
+                    menu.as_mut(),
+                    &mut anchor_row,
+                    RenderOptions {
+                        show_toolbar: self.mouse,
+                        color: self.color,
+                        case_ids: &self.case_ids,
+                    },
+                    &mut render_state,
+                )?;
+                redraw = false;
+            }
             let should_capture = self.mouse;
             if should_capture != mouse_capture {
                 if should_capture {
-                    execute!(io::stderr(), EnableMouseCapture)?;
+                    terminal_state::enable_mouse_capture()?;
                 } else {
-                    execute!(io::stderr(), DisableMouseCapture)?;
+                    terminal_state::disable_mouse_capture()?;
                 }
                 mouse_capture = should_capture;
             }
@@ -203,7 +207,7 @@ impl LineEditor {
                         &mut draft,
                     )? {
                         if mouse_capture {
-                            execute!(io::stderr(), DisableMouseCapture)?;
+                            terminal_state::disable_mouse_capture()?;
                         }
                         finish_line(prompt, &buffer, anchor_row, self.color)?;
                         if let EditorSignal::Success(line) = &signal {
@@ -211,11 +215,13 @@ impl LineEditor {
                         }
                         return Ok(signal);
                     }
+                    redraw = true;
                 }
                 Event::Paste(value) => {
                     buffer.insert_str(cursor, &value);
                     cursor += value.len();
                     refresh_command_menu(&buffer, cursor, &mut menu);
+                    redraw = true;
                 }
                 Event::Mouse(mouse_event) if mouse_capture => match mouse_event.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
@@ -231,7 +237,7 @@ impl LineEditor {
                             })
                             .flatten();
                         if let Some(action) = action {
-                            execute!(io::stderr(), DisableMouseCapture)?;
+                            terminal_state::disable_mouse_capture()?;
                             finish_line(prompt, &buffer, anchor_row, self.color)?;
                             return Ok(EditorSignal::Action(action));
                         } else if mouse_event.row >= layout.candidate_row
@@ -243,6 +249,7 @@ impl LineEditor {
                                 active.selected = active.offset + visible;
                                 apply_selected(&mut buffer, &mut cursor, active)?;
                                 menu = None;
+                                redraw = true;
                             }
                         } else if mouse_event.row == layout.button_row {
                             if mouse_event.column < layout.select_end {
@@ -250,18 +257,29 @@ impl LineEditor {
                                     apply_selected(&mut buffer, &mut cursor, active)?;
                                 }
                                 menu = None;
+                                redraw = true;
                             } else if (layout.cancel_start..layout.cancel_end)
                                 .contains(&mouse_event.column)
                             {
                                 menu = None;
+                                redraw = true;
                             }
                         }
                     }
-                    MouseEventKind::ScrollUp => activate_selection(menu.as_mut(), -1),
-                    MouseEventKind::ScrollDown => activate_selection(menu.as_mut(), 1),
+                    MouseEventKind::ScrollUp if menu.is_some() => {
+                        activate_selection(menu.as_mut(), -1);
+                        redraw = true;
+                    }
+                    MouseEventKind::ScrollDown if menu.is_some() => {
+                        activate_selection(menu.as_mut(), 1);
+                        redraw = true;
+                    }
                     _ => {}
                 },
-                Event::Resize(_, _) => render_state.toolbar_dirty = true,
+                Event::Resize(_, _) => {
+                    render_state.toolbar_dirty = true;
+                    redraw = true;
+                }
                 _ => {}
             }
         }

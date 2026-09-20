@@ -231,6 +231,15 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[ Interactive ]");
+    assert!(
+        !session.text().contains("\x1b[?1003h"),
+        "mouse mode must not enable all-motion tracking"
+    );
+    assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
+    // An unsolicited pointer-motion report must not repaint any editor row.
+    session.send(b"\x1b[<35;50;10M");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
     assert_eq!(session.text().matches("[ Interactive ]").count(), 1);
     session.send(b"/xyz");
     session.wait_for("/xyz");

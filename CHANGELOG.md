@@ -34,6 +34,8 @@ All notable changes to this project are documented here. The format follows
 
 - Fixed saved-case discovery for relative sources in the current directory
   (`run-cli a.cpp` now correctly finds `a.in1`, `a.in2`, and so on).
+- Removed mouse-mode flicker by requesting click/scroll events instead of
+  pointer-motion events and skipping redraws for events that do not change UI.
 
 ## [0.2.0] - 2026-09-19
 

@@ -1,10 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::theme;
 use crossterm::cursor::{Hide, MoveTo, MoveToColumn, Show};
-use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, MouseButton,
-    MouseEventKind,
-};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
 use crossterm::style::{
     Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
 };
@@ -16,13 +13,19 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 struct TerminalGuard;
 
+// Normal tracking reports clicks, releases, and wheel events. Crossterm's
+// EnableMouseCapture also enables all-motion tracking (1003), which floods an
+// interactive editor with events whenever the pointer moves.
+const ENABLE_MOUSE_CLICKS: &str = "\x1b[?1000h\x1b[?1006h";
+const DISABLE_MOUSE_TRACKING: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+
 impl TerminalGuard {
     fn enter(mouse: bool) -> AppResult<Self> {
         terminal::enable_raw_mode()
             .map_err(|error| AppError::new(format!("cannot enter terminal raw mode: {error}")))?;
         let mut stderr = io::stderr();
         if mouse {
-            execute!(stderr, EnableMouseCapture, Hide)?;
+            execute!(stderr, Print(ENABLE_MOUSE_CLICKS), Hide)?;
         } else {
             execute!(stderr, Hide)?;
         }
@@ -40,11 +43,21 @@ pub fn restore_terminal() {
     let mut stderr = io::stderr();
     let _ = execute!(
         stderr,
-        DisableMouseCapture,
+        Print(DISABLE_MOUSE_TRACKING),
         Show,
         SetAttribute(Attribute::Reset)
     );
     let _ = terminal::disable_raw_mode();
+}
+
+pub fn enable_mouse_capture() -> AppResult<()> {
+    execute!(io::stderr(), Print(ENABLE_MOUSE_CLICKS))?;
+    Ok(())
+}
+
+pub fn disable_mouse_capture() -> AppResult<()> {
+    execute!(io::stderr(), Print(DISABLE_MOUSE_TRACKING))?;
+    Ok(())
 }
 
 pub fn select_source(sources: &[PathBuf], mouse: bool, color: bool) -> AppResult<Option<PathBuf>> {
