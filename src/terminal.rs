@@ -353,7 +353,7 @@ pub fn select_source(sources: &[PathBuf], mouse: bool, color: bool) -> AppResult
     if sources.is_empty() {
         return Ok(None);
     }
-    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+    if !io::stdin().is_terminal() || !stderr_is_terminal() {
         return Ok(sources.first().cloned());
     }
     let _guard = TerminalGuard::enter(mouse)?;
@@ -443,70 +443,28 @@ pub fn select_source(sources: &[PathBuf], mouse: bool, color: bool) -> AppResult
 }
 
 pub fn confirm(prompt: &str, action: &str, mouse: bool, color: bool) -> AppResult<bool> {
-    if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
+    if !io::stdin().is_terminal() || !stderr_is_terminal() {
         return Ok(false);
     }
     let _guard = TerminalGuard::enter(mouse)?;
     let (_, row) = crossterm::cursor::position().unwrap_or((0, 0));
-    let mut selected = 1_usize;
+    // Reaching this dialog already requires an explicit destructive command.
+    // Keep the requested action focused so Enter confirms it; Esc and `n`
+    // remain immediate cancellation shortcuts.
+    let mut selected = 0_usize;
+    let mut redraw = true;
+    let mut layout = ConfirmationLayout::default();
     loop {
-        let (width, _) = terminal::size().unwrap_or((80, 24));
-        let width = width.max(1) as usize;
-        let compact = width < action.chars().count() + 18;
-        let action_label = if compact { "Y" } else { action };
-        let cancel_label = if compact { "N" } else { "Cancel" };
-        let action_width = action_label.chars().count() + if compact { 2 } else { 4 };
-        let cancel_width = cancel_label.chars().count() + if compact { 2 } else { 4 };
-        let buttons_width = action_width + 2 + cancel_width;
-        let prompt = truncate_width(prompt, width);
-        let same_line = UnicodeWidthStr::width(prompt.as_str()) + 2 + buttons_width <= width;
-        let button_row = row + u16::from(!same_line);
-        let action_start = if same_line {
-            UnicodeWidthStr::width(prompt.as_str()) as u16 + 2
-        } else {
-            0
-        };
-        let action_end = action_start + action_width as u16;
-        let cancel_start = action_end + 2;
-        let cancel_end = cancel_start + cancel_width as u16;
-        let mut stderr = io::stderr();
-        queue!(stderr, MoveTo(0, row), Clear(ClearType::FromCursorDown))?;
-        if color {
-            queue!(stderr, SetForegroundColor(theme::WARNING))?;
+        if redraw {
+            layout = render_confirmation(prompt, action, selected, row, color)?;
+            redraw = false;
         }
-        queue!(
-            stderr,
-            SetAttribute(Attribute::Bold),
-            Print(&prompt),
-            SetAttribute(Attribute::Reset),
-            ResetColor
-        )?;
-        if same_line {
-            queue!(stderr, Print("  "))?;
-        } else {
-            queue!(stderr, MoveTo(0, button_row))?;
-        }
-        draw_tinted_button(
-            &mut stderr,
-            action_label,
-            selected == 0,
-            compact,
-            color,
-            theme::DANGER,
-        )?;
-        queue!(stderr, Print("  "))?;
-        draw_tinted_button(
-            &mut stderr,
-            cancel_label,
-            selected == 1,
-            compact,
-            color,
-            theme::MUTED,
-        )?;
-        stderr.flush()?;
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Tab | KeyCode::Left | KeyCode::Right => selected = 1 - selected,
+                KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                    selected = 1 - selected;
+                    redraw = true;
+                }
                 KeyCode::Enter | KeyCode::Char(' ') => {
                     clear_from(row)?;
                     return Ok(selected == 0);
@@ -522,23 +480,102 @@ pub fn confirm(prompt: &str, action: &str, mouse: bool, color: bool) -> AppResul
                 _ => {}
             },
             Event::Mouse(mouse_event) if mouse => {
-                if mouse_event.row == button_row {
+                if mouse_event.row == layout.button_row {
                     if let MouseEventKind::Down(MouseButton::Left) = mouse_event.kind {
-                        if (action_start..action_end).contains(&mouse_event.column) {
+                        if (layout.action_start..layout.action_end).contains(&mouse_event.column) {
                             clear_from(row)?;
                             return Ok(true);
                         }
-                        if (cancel_start..cancel_end).contains(&mouse_event.column) {
+                        if (layout.cancel_start..layout.cancel_end).contains(&mouse_event.column) {
                             clear_from(row)?;
                             return Ok(false);
                         }
                     }
                 }
             }
-            Event::Resize(_, _) => {}
+            Event::Resize(_, _) => redraw = true,
             _ => {}
         }
     }
+}
+
+#[derive(Default)]
+struct ConfirmationLayout {
+    button_row: u16,
+    action_start: u16,
+    action_end: u16,
+    cancel_start: u16,
+    cancel_end: u16,
+}
+
+fn render_confirmation(
+    prompt: &str,
+    action: &str,
+    selected: usize,
+    row: u16,
+    color: bool,
+) -> AppResult<ConfirmationLayout> {
+    let (width, _) = terminal::size().unwrap_or((80, 24));
+    let width = width.max(1) as usize;
+    let compact = width < action.chars().count() + 18;
+    let action_label = if compact { "Y" } else { action };
+    let cancel_label = if compact { "N" } else { "Cancel" };
+    let action_width = action_label.chars().count() + if compact { 2 } else { 4 };
+    let cancel_width = cancel_label.chars().count() + if compact { 2 } else { 4 };
+    let buttons_width = action_width + 2 + cancel_width;
+    let prompt = truncate_width(prompt, width);
+    let same_line = UnicodeWidthStr::width(prompt.as_str()) + 2 + buttons_width <= width;
+    let button_row = row + u16::from(!same_line);
+    let action_start = if same_line {
+        UnicodeWidthStr::width(prompt.as_str()) as u16 + 2
+    } else {
+        0
+    };
+    let action_end = action_start + action_width as u16;
+    let cancel_start = action_end + 2;
+    let cancel_end = cancel_start + cancel_width as u16;
+    let mut stderr = io::stderr();
+    queue!(stderr, MoveTo(0, row), Clear(ClearType::FromCursorDown))?;
+    if color {
+        queue!(stderr, SetForegroundColor(theme::WARNING))?;
+    }
+    queue!(
+        stderr,
+        SetAttribute(Attribute::Bold),
+        Print(&prompt),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    if same_line {
+        queue!(stderr, Print("  "))?;
+    } else {
+        queue!(stderr, MoveTo(0, button_row))?;
+    }
+    draw_tinted_button(
+        &mut stderr,
+        action_label,
+        selected == 0,
+        compact,
+        color,
+        theme::DANGER,
+    )?;
+    queue!(stderr, Print("  "))?;
+    draw_tinted_button(
+        &mut stderr,
+        cancel_label,
+        selected == 1,
+        compact,
+        color,
+        theme::MUTED,
+    )?;
+    stderr.flush()?;
+    Ok(ConfirmationLayout {
+        button_row,
+        action_start,
+        action_end,
+        cancel_start,
+        cancel_end,
+    })
 }
 
 fn clear_from(row: u16) -> AppResult<()> {

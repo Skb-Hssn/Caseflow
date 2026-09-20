@@ -595,6 +595,43 @@ fn canonical_session_controls_work_from_the_keyboard() {
 }
 
 #[test]
+fn enter_confirms_case_deletion() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip())\n");
+    let saved = directory.path().join("main.in2");
+    fs::write(&saved, "delete me\n").unwrap();
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+
+    let command_start = session.output_len();
+    session.send(b"/case delete 2\r");
+    session.wait_for_sequence_since(command_start, &["Delete saved input #2?", "[ Delete ]"]);
+    let confirmation_count = session
+        .text_since(command_start)
+        .matches("Delete saved input #2?")
+        .count();
+    session.send(b"x");
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(
+        session
+            .text_since(command_start)
+            .matches("Delete saved input #2?")
+            .count(),
+        confirmation_count,
+        "ignored input must not redraw and duplicate the confirmation"
+    );
+    session.send(b"\r");
+    session.wait_for_sequence_since(command_start, &["Deleted", "run-cli:main.py"]);
+    assert!(
+        !saved.exists(),
+        "Enter should confirm the focused delete action"
+    );
+
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print(input().strip())\n");

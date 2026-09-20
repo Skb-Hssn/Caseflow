@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-20
+
+### Fixed
+
+- Prevented confirmation dialogs from redrawing for ignored or queued key
+  events, eliminating repeated destructive-confirmation messages.
+
+## [0.5.2] - 2026-09-20
+
+### Fixed
+
+- Fixed REPL confirmations and source selection incorrectly treating captured
+  output as a non-terminal and cancelling immediately.
+- Focused the requested destructive action in confirmation dialogs so Enter
+  confirms `/case delete` and `/case clear`; Esc and `n` still cancel safely.
+
 ## [0.5.1] - 2026-09-20
 
 ### Changed
