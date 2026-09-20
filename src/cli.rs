@@ -52,6 +52,8 @@ pub enum Command {
     Compare(CompareArgs),
     /// Compare generated cases against a brute-force solution.
     Stress(StressArgs),
+    /// Import sample cases from the Competitive Companion browser extension.
+    Companion(CompanionArgs),
     /// Inspect installed toolchains and clipboard support.
     Doctor,
     /// Generate shell completions.
@@ -242,6 +244,20 @@ pub struct StressArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct CompanionArgs {
+    #[arg(value_hint = ValueHint::FilePath)]
+    pub source: PathBuf,
+
+    /// Local port configured in Competitive Companion.
+    #[arg(long, default_value_t = 10043)]
+    pub port: u16,
+
+    /// Seconds to wait for one problem payload.
+    #[arg(long, value_name = "SECONDS", default_value_t = 120.0)]
+    pub wait: f64,
+}
+
+#[derive(Debug, Args)]
 pub struct CompletionArgs {
     #[arg(value_enum)]
     pub shell: clap_complete::Shell,
@@ -383,6 +399,26 @@ mod tests {
             Cli::try_parse_from(["run-cli", "run", "a.cpp", "--clipboard", "--input", "a.in"])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn parses_companion_receiver_options() {
+        let cli = Cli::try_parse_from([
+            "run-cli",
+            "companion",
+            "a.cpp",
+            "--port",
+            "4244",
+            "--wait",
+            "30",
+        ])
+        .unwrap();
+        let Some(Command::Companion(args)) = cli.command else {
+            panic!("expected companion");
+        };
+        assert_eq!(args.source, PathBuf::from("a.cpp"));
+        assert_eq!(args.port, 4244);
+        assert_eq!(args.wait, 30.0);
     }
 
     #[test]

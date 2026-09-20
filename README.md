@@ -73,6 +73,7 @@ select. Inside a session:
 /case paste --run
 /compare 1 expected.out
 /stress brute.cpp generator.py --runs 500 --timeout 2
+/companion                  # wait for samples from the browser extension
 /open B.cpp
 /again
 /clear
@@ -83,8 +84,11 @@ select. Inside a session:
 `/run` uses interactive terminal input. `/run clipboard` reads the clipboard,
 stores it as the next case ID, and runs that saved case. `/test` runs all saved
 cases by default; use `last` or one or more space- or comma-separated IDs to
-narrow the selection. `/again` repeats the most recent run or test, while
-`/clear` clears the retained output viewport.
+narrow the selection. When `A.out<ID>` exists beside `A.in<ID>`, `/test`
+compares the generated output byte for byte and shows per-case plus aggregate
+PASS/FAIL verdicts. Cases without expected output remain run-only. `/again`
+repeats the most recent run or test, while `/clear` clears the retained output
+viewport.
 
 `/debug` toggles debug mode. The explicit forms `/debug on`, `/debug off`, and
 `/debug toggle` are useful in history and scripts. `/open` switches the active
@@ -156,6 +160,9 @@ run-cli case clear A.cpp --force
 run-cli compare A.cpp 1 expected.out
 run-cli stress A.cpp brute.cpp generator.py --runs 500
 
+# Import one problem from Competitive Companion
+run-cli companion A.cpp
+
 # Shell completion
 run-cli completion zsh > ~/.zfunc/_run-cli
 run-cli completion bash > ~/.local/share/bash-completion/completions/run-cli
@@ -168,6 +175,33 @@ suggestions remain consistent in both interfaces.
 
 When stdout is redirected, `run-cli` leaves it exclusively for program output. Build messages, errors, and resource measurements go to stderr. An explicit output file is replaced atomically only after a successful run.
 
+## Competitive Companion
+
+Start a receiver for the source you want to test, then click
+[Competitive Companion](https://github.com/jmerle/competitive-companion)'s
+green `+` button on a single problem page:
+
+```sh
+# Inside the full-screen session
+/companion
+
+# Or as a one-shot command
+run-cli companion A.cpp
+```
+
+The default port is `10043`, one of Competitive Companion's built-in ports.
+For a custom extension port or a different wait time, use
+`/companion --port 4244 --wait 300` (or the same options after the one-shot
+command). The listener accepts only local loopback connections, stops after
+one problem, and can be cancelled with Ctrl-C. Send a single problem page;
+multi-problem contest batches are rejected so samples from different problems
+cannot be mixed into one source.
+
+Each sample appends a matched pair such as `A.in3` and `A.out3`. Existing IDs
+are never overwritten. The `.out<ID>` file preserves the sample's expected
+output. `/test` automatically compares generated output with it byte for byte
+and returns a failure status if any judged case differs.
+
 ## Saved cases
 
 Cases remain beside the source stem and are shared across languages:
@@ -177,6 +211,8 @@ A.cpp
 A.py
 A.in1
 A.in2
+A.out1
+A.out2
 ```
 
 - IDs are positive integers.
@@ -184,6 +220,10 @@ A.in2
 - `last` selects the newest modification time, breaking ties with the highest ID
   (the legacy `--last` spelling remains accepted).
 - Concurrent writers use a shared file lock.
+- Competitive Companion imports expected output as `.out<ID>`; deleting or
+  clearing an imported input also removes its matched output.
+- Tests automatically judge a case when its matching `.out<ID>` is present;
+  cases without one continue to run without a verdict.
 - Clipboard access prefers `wl-copy`/`wl-paste`, then `xclip`.
 - In the REPL, `/run clipboard` is the short form of saving the clipboard as
   the next case and immediately running it.

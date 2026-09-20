@@ -353,6 +353,16 @@ impl Session {
                 self.execute(args)?;
                 Ok(SessionAction::Continue)
             }
+            "/companion" => {
+                let mut args = vec![
+                    OsString::from("run-cli"),
+                    OsString::from("companion"),
+                    self.source.requested.as_os_str().to_owned(),
+                ];
+                args.extend(tokens.iter().skip(1).map(OsString::from));
+                self.execute(args)?;
+                Ok(SessionAction::Continue)
+            }
             "/doctor" => {
                 self.execute(vec![OsString::from("run-cli"), OsString::from("doctor")])?;
                 Ok(SessionAction::Continue)
@@ -494,6 +504,7 @@ fn print_help(topic: Option<&str>) {
             "case" => "/case list|show ID|copy ID|paste [ID] [--run]|add|edit ID|delete ID|clear",
             "compare" | "diff" => "/compare ID EXPECTED",
             "stress" => "/stress BRUTE GENERATOR [--runs N] [--timeout SEC]",
+            "companion" => "/companion [--port PORT] [--wait SEC]\nWait for one problem from the Competitive Companion extension and append its samples.",
             "open" | "source" => "/open [PATH]\nWith no path, open the fuzzy source picker.",
             "debug" | "mode" => "/debug [on|off|toggle]\nWith no value, toggle debug mode.",
             "mouse" => "/mouse [on|off|toggle]\nWith no value, toggle mouse controls.",
@@ -524,6 +535,8 @@ CASES
   /case add|edit ID|delete ID|clear
   /compare ID EXPECTED
   /stress BRUTE GENERATOR [--runs N] [--timeout SEC]
+  /companion [--port PORT] [--wait SEC]
+                          import samples from Competitive Companion
 
 SESSION
   /open [PATH]          switch the active source

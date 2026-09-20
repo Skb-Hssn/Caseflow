@@ -134,6 +134,8 @@ pub struct RunRequest {
 #[derive(Debug, Clone)]
 pub enum OutputTarget {
     Inherit,
+    /// Stream stdout to the caller while preserving its exact bytes in a file.
+    TeeFile(PathBuf),
     AtomicFile(PathBuf),
     File(PathBuf),
 }

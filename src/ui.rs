@@ -83,6 +83,19 @@ impl Ui {
         }
     }
 
+    pub fn failure(&self, message: impl AsRef<str>) {
+        if self.color {
+            eprintln!(
+                "  {}✗ {}{}",
+                theme::ANSI_DANGER_BOLD,
+                message.as_ref(),
+                theme::ANSI_RESET
+            );
+        } else {
+            eprintln!("  ✗ {}", message.as_ref());
+        }
+    }
+
     pub fn error(&self, message: impl AsRef<str>) {
         if self.color {
             eprintln!(

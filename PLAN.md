@@ -7,9 +7,10 @@ Build `run-cli`, a Linux-first Rust CLI that reimplements all `run.sh` capabilit
 - An inline, scrollback-friendly REPL with slash commands, history, completion, source selection, and status.
 - Structured one-shot commands for scripts and CI.
 - Compatibility with existing `<stem>.in<ID>` test cases.
-- Native process, timeout, resource, locking, clipboard, diff, and stress-test handling without invoking `run.sh`.
+- Native process, timeout, resource, locking, clipboard, diff, stress-test,
+  and Competitive Companion import handling without invoking `run.sh`.
 
-The interaction borrows the documented Codex CLI pattern of an interactive project session plus scriptable commands, but this product remains deterministic: no LLM, authentication, network access, or autonomous code editing. See the [official Codex CLI documentation](https://developers.openai.com/es-419/docs/codex/cli).
+The interaction borrows the documented Codex CLI pattern of an interactive project session plus scriptable commands, but this product remains deterministic: no LLM, authentication, remote network access, or autonomous code editing. Its optional Competitive Companion receiver listens only on the local loopback interface. See the [official Codex CLI documentation](https://developers.openai.com/es-419/docs/codex/cli).
 
 ## Public Interface
 
@@ -27,12 +28,14 @@ The interaction borrows the documented Codex CLI pattern of an interactive proje
 - `/run clipboard`: save clipboard input as the next case and run it.
 - `/build [--debug]`: compile without running; reject Python clearly.
 - `/debug [on|off|toggle]`: set or toggle the session build mode; the bare command toggles.
-- `/test [all|last|ID ...]`: run all saved cases by default, or run selected space- or comma-separated IDs, compiling once for the group.
+- `/test [all|last|ID ...]`: run all saved cases by default, or run selected space- or comma-separated IDs, compiling once for the group. When a paired `.out<ID>` exists, stream and byte-compare generated output, report per-case and aggregate verdicts, and fail on any mismatch or abnormal execution.
 - `/case list|show|copy|delete|clear`: manage compatible `.in<ID>` files.
 - `/case add` and `/case edit ID`: create or edit saved input through `$VISUAL`, `$EDITOR`, `nvim`, or `vim` while preserving terminal state.
 - `/case paste [ID] [--run]`: atomically append clipboard data by default, replace ID when provided, and optionally execute it.
 - `/compare ID EXPECTED`: run a saved case and byte-compare its output.
 - `/stress BRUTE GENERATOR [--runs N] [--timeout SEC]`: differential stress testing.
+- `/companion [--port PORT] [--wait SEC]`: append one problem's sample inputs
+  and expected outputs received from the Competitive Companion extension.
 - `/again`: repeat the most recent run or test operation.
 - `/clear`: clear retained output from the session viewport.
 - `/status`, `/doctor`, `/help [COMMAND]`, and `/exit`.
@@ -69,6 +72,7 @@ The prompt displays the active source, language, and build mode. Ctrl-C cancels 
 - `run-cli case list|show|copy|paste|add|edit|delete|clear SOURCE`.
 - `run-cli compare SOURCE ID EXPECTED [--debug]`.
 - `run-cli stress SOURCE BRUTE GENERATOR [--runs N] [--timeout SEC]`.
+- `run-cli companion SOURCE [--port PORT] [--wait SEC]`.
 - `run-cli doctor` and `run-cli completion SHELL`.
 - Global `--color auto|always|never` and `--mouse`; `NO_COLOR` always wins, and mouse mode is never enabled for non-interactive output.
 
@@ -94,10 +98,17 @@ Decorative UI appears only on terminals. In pipelines, child stdout stays clean 
 - Rebuild compiled sources once per top-level operation; multi-case and stress operations reuse that build. Store artifacts outside the source tree under `$XDG_CACHE_HOME/run-cli/build`, keyed by canonical source path and mode.
 - Execute children in their own process group. Timeouts terminate the whole group, wait one second, then force-kill it. Report status, wall time, user/system CPU, CPU percentage, and peak RSS.
 - Preserve case semantics exactly: positive numeric IDs, `next = max + 1`, no renumbering, newest mtime for `last` with highest ID as tie-breaker, and cases shared by source stem across languages.
+- Receive Competitive Companion's documented HTTP JSON protocol on loopback
+  only, limit request size, reject multi-problem batches, and atomically append
+  each sample as a paired `.in<ID>`/`.out<ID>` without overwriting existing IDs.
 - Use cross-process locks and same-directory temporary files plus atomic rename for case writes and output files. Failed clipboard reads or program runs leave existing files unchanged.
 - Suspend run-cli's terminal guards while an external case editor owns the terminal, then restore the alternate screen, fixed layout, mouse mode, and viewport after it exits. A failed editor must not create or replace a case.
 - Reject outputs that would overwrite a source, input, another output, or internal build artifact. Continue later batch inputs after a failure and return the final nonzero status.
-- Preserve byte-for-byte diff/stress comparison. The generator receives the 1-based case number; the first mismatch or abnormal exit saves the failing input as the next case and prints a unified diff.
+- Preserve byte-for-byte saved-case/diff/stress comparison. Saved tests are
+  automatically judged against paired `.out<ID>` files while unpaired cases
+  remain run-only. The generator receives the 1-based case number; the first
+  stress mismatch or abnormal exit saves the failing input as the next case
+  and prints a unified diff.
 - Prefer `wl-copy`/`wl-paste`, then `xclip`; `/doctor` reports missing compilers, runtimes, and clipboard utilities.
 - Prompt before `/case delete` and `/case clear`; one-shot equivalents require `--force`.
 - Read global configuration from `$XDG_CONFIG_HOME/run-cli/config.toml` and the nearest `.run-cli.toml` above the active source. Precedence is CLI flags, environment, project config, user config, then defaults. The UI section includes `mouse = false` by default.

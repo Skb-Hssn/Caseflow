@@ -3,6 +3,7 @@
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::fs;
 use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -186,6 +187,38 @@ fn repl_command(directory: &TempDir, source: &Path, mouse: bool) -> CommandBuild
     command
 }
 
+fn unused_loopback_port() -> Option<u16> {
+    match TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => Some(listener.local_addr().unwrap().port()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping loopback test: {error}");
+            None
+        }
+        Err(error) => panic!("could not reserve a loopback port: {error}"),
+    }
+}
+
+#[test]
+fn ctrl_c_cancels_companion_wait_and_returns_to_repl() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let Some(port) = unused_loopback_port() else {
+        return;
+    };
+    let session = PtySession::spawn(repl_command(&directory, &source, false));
+    session.wait_for("run-cli:main.py");
+    let prompt_count = session.text().matches("run-cli:main.py").count();
+
+    session.send(format!("/companion --port {port} --wait 30\r").as_bytes());
+    session.wait_for("Listening for Competitive Companion");
+    session.send(b"\x03");
+    session.wait_for("Competitive Companion import cancelled");
+    session.wait_for_count("run-cli:main.py", prompt_count + 1);
+
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
 #[test]
 fn repl_handles_resize_and_restores_terminal() {
     let directory = TempDir::new().unwrap();
@@ -285,6 +318,54 @@ fn one_ctrl_c_stops_an_infinite_output_loop_without_killing_repl() {
     session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.py"]);
     session.send(b"/status\r");
     session.wait_for_sequence_since(interrupt_offset, &["Language", "run-cli:main.py"]);
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn ordinary_output_larger_than_the_viewport_is_not_suppressed() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        "for index in range(40):\n    print(f'ordinary-{index:02}', flush=True)\n",
+    );
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/run\r");
+    session.wait_for_sequence_since(
+        run_offset,
+        &["ordinary-39", "Success (exit 0)", "run-cli:main.py"],
+    );
+    let output = session.text_since(run_offset);
+    assert!(
+        !output.contains("Output limit reached"),
+        "ordinary output should remain live without a suppression warning"
+    );
+    assert!(!output.contains("... final output ..."));
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn saved_case_with_expected_output_shows_a_pass_verdict() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip().upper())\n");
+    fs::write(directory.path().join("main.in1"), "accepted\n").unwrap();
+    fs::write(directory.path().join("main.out1"), "ACCEPTED\n").unwrap();
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/test 1\r");
+    session.wait_for_sequence_since(
+        run_offset,
+        &[
+            "ACCEPTED",
+            "Case #1 verdict: PASS",
+            "Verdict: PASS · 1/1 judged case(s) passed",
+            "run-cli:main.py",
+        ],
+    );
     session.send(b"/exit\r");
     assert!(session.wait().success());
 }

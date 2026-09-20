@@ -4,7 +4,7 @@ use crate::terminal;
 use crate::ui::Ui;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -158,7 +158,8 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
     }
 
     let mut atomic_output = None;
-    let mut output_pty_master = None;
+    let mut output_reader = None;
+    let mut tee_output = None;
     match &request.output {
         OutputTarget::Inherit => {
             if terminal::output_capture_active() {
@@ -168,10 +169,29 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
                 })?;
                 command.stdout(Stdio::from(slave));
                 command.stderr(Stdio::from(stderr));
-                output_pty_master = Some(master);
+                output_reader = Some(master);
             } else {
                 command.stdout(Stdio::inherit());
                 command.stderr(Stdio::inherit());
+            }
+        }
+        OutputTarget::TeeFile(path) => {
+            let file = File::create(path).map_err(|error| {
+                AppError::new(format!(
+                    "cannot create captured output '{}': {error}",
+                    path.display()
+                ))
+            })?;
+            if terminal::output_capture_active() {
+                let (master, slave) = open_output_pty()?;
+                command.stdout(Stdio::from(slave));
+                command.stderr(Stdio::inherit());
+                output_reader = Some(master);
+                tee_output = Some(file);
+            } else {
+                command.stdout(Stdio::piped());
+                command.stderr(Stdio::inherit());
+                tee_output = Some(file);
             }
         }
         OutputTarget::File(path) => {
@@ -228,8 +248,18 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
     let pid = child.id() as i32;
     let _signal_guard = SignalGuard::install(pid);
     let _foreground_guard = owns_terminal.then(|| ForegroundGuard::give_to(pid));
-    let output_reader =
-        output_pty_master.map(|master| std::thread::spawn(move || drain_pty(master)));
+    let output_reader = if let Some(reader) = output_reader {
+        let tee = tee_output.take();
+        Some(std::thread::spawn(move || drain_output(reader, tee)))
+    } else if let Some(tee) = tee_output.take() {
+        let reader = child
+            .stdout
+            .take()
+            .expect("tee output must configure piped stdout");
+        Some(std::thread::spawn(move || drain_output(reader, Some(tee))))
+    } else {
+        None
+    };
 
     let mut child_stdin = child.stdin.take();
     let started = Instant::now();
@@ -384,16 +414,35 @@ fn open_output_pty() -> AppResult<(File, File)> {
             io::Error::last_os_error()
         )));
     }
-    Ok(unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) })
+    let master = unsafe { File::from_raw_fd(master) };
+    let slave = unsafe { File::from_raw_fd(slave) };
+    let mut settings: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(slave.as_raw_fd(), &mut settings) } != 0 {
+        return Err(AppError::new(format!(
+            "cannot inspect output terminal: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    settings.c_oflag &= !(libc::OPOST as libc::tcflag_t);
+    if unsafe { libc::tcsetattr(slave.as_raw_fd(), libc::TCSANOW, &settings) } != 0 {
+        return Err(AppError::new(format!(
+            "cannot configure output terminal: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    Ok((master, slave))
 }
 
-fn drain_pty(mut master: File) -> AppResult<()> {
+fn drain_output(mut reader: impl Read, mut tee: Option<File>) -> AppResult<()> {
     let mut output = io::stdout();
     let mut chunk = [0_u8; 8192];
     loop {
-        match master.read(&mut chunk) {
+        match reader.read(&mut chunk) {
             Ok(0) => break,
             Ok(count) => {
+                if let Some(file) = tee.as_mut() {
+                    file.write_all(&chunk[..count])?;
+                }
                 output.write_all(&chunk[..count])?;
                 output.flush()?;
             }
@@ -401,6 +450,9 @@ fn drain_pty(mut master: File) -> AppResult<()> {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
             Err(error) => return Err(error.into()),
         }
+    }
+    if let Some(file) = tee.as_mut() {
+        file.flush()?;
     }
     Ok(())
 }

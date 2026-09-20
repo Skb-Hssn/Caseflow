@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -46,6 +47,31 @@ fn tool_exists(tool: &str) -> bool {
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
+}
+
+fn unused_loopback_port() -> Option<u16> {
+    match TcpListener::bind(("127.0.0.1", 0)) {
+        Ok(listener) => Some(listener.local_addr().unwrap().port()),
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping loopback test: {error}");
+            None
+        }
+        Err(error) => panic!("could not reserve a loopback port: {error}"),
+    }
+}
+
+fn connect_with_retry(port: u16) -> TcpStream {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => return stream,
+            Err(error) if Instant::now() < deadline => {
+                let _ = error;
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(error) => panic!("could not connect to companion receiver: {error}"),
+        }
+    }
 }
 
 #[test]
@@ -107,6 +133,60 @@ fn canonical_test_selectors_cover_all_ids_commas_and_last() {
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
     }
+}
+
+#[test]
+fn test_automatically_judges_matching_output_files() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("judge.py");
+    fs::write(
+        &source,
+        "import sys\nsys.stdout.write(sys.stdin.read().strip().upper() + '\\n')\n",
+    )
+    .unwrap();
+    for (id, input) in [(1, "accepted\n"), (2, "wrong\n"), (3, "run only\n")] {
+        fs::write(directory.path().join(format!("judge.in{id}")), input).unwrap();
+    }
+    fs::write(directory.path().join("judge.out1"), "ACCEPTED\n").unwrap();
+    fs::write(directory.path().join("judge.out2"), "something else\n").unwrap();
+
+    let failed = command(&directory)
+        .arg("test")
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert_eq!(failed.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&failed.stdout),
+        "ACCEPTED\nWRONG\nRUN ONLY\n"
+    );
+    let diagnostics = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        diagnostics.contains("Case #1 verdict: PASS"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("Case #2 verdict: FAIL"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("Verdict: FAIL · 1/2 judged case(s) passed"),
+        "{diagnostics}"
+    );
+    assert!(!diagnostics.contains("Case #3 verdict"), "{diagnostics}");
+
+    let passed = command(&directory)
+        .arg("test")
+        .arg(&source)
+        .arg("1")
+        .output()
+        .unwrap();
+    assert!(passed.status.success());
+    let diagnostics = String::from_utf8_lossy(&passed.stderr);
+    assert!(
+        diagnostics.contains("Verdict: PASS · 1/1 judged case(s) passed"),
+        "{diagnostics}"
+    );
 }
 
 #[test]
@@ -496,4 +576,68 @@ fn dynamic_shell_completion_uses_ranked_file_suggestions() {
         assert!(generated.status.success());
         assert!(String::from_utf8_lossy(&generated.stdout).contains("__complete"));
     }
+}
+
+#[test]
+fn competitive_companion_imports_paired_samples_without_overwriting() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("main.py");
+    fs::write(&source, "print(input())\n").unwrap();
+    fs::write(directory.path().join("main.in1"), "existing\n").unwrap();
+    let Some(port) = unused_loopback_port() else {
+        return;
+    };
+    let child = command(&directory)
+        .arg("companion")
+        .arg(&source)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--wait")
+        .arg("5")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let body = br#"{"name":"Pair Sum","group":"Example Round","url":"https://example.test/problem","interactive":false,"memoryLimit":256,"timeLimit":1000,"tests":[{"input":"2 3\n","output":"5\n"},{"input":"10 20\n","output":"30\n"}],"testType":"single","input":{"type":"stdin"},"output":{"type":"stdout"},"languages":{},"batch":{"id":"single","size":1}}"#;
+    let mut stream = connect_with_retry(port);
+    write!(
+        stream,
+        "POST / HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read(directory.path().join("main.in1")).unwrap(),
+        b"existing\n"
+    );
+    assert_eq!(
+        fs::read(directory.path().join("main.in2")).unwrap(),
+        b"2 3\n"
+    );
+    assert_eq!(
+        fs::read(directory.path().join("main.out2")).unwrap(),
+        b"5\n"
+    );
+    assert_eq!(
+        fs::read(directory.path().join("main.in3")).unwrap(),
+        b"10 20\n"
+    );
+    assert_eq!(
+        fs::read(directory.path().join("main.out3")).unwrap(),
+        b"30\n"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Imported 2 sample(s)"));
 }

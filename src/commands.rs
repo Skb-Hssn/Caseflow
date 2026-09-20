@@ -1,9 +1,10 @@
 use crate::build;
 use crate::cases;
 use crate::cli::{
-    BuildArgs, CaseArgs, CaseCommand, ColorArg, Command as CliCommand, CompareArgs, CompleteArgs,
-    RunArgs, StressArgs, TestArgs,
+    BuildArgs, CaseArgs, CaseCommand, ColorArg, Command as CliCommand, CompanionArgs, CompareArgs,
+    CompleteArgs, RunArgs, StressArgs, TestArgs,
 };
+use crate::companion;
 use crate::config::{parse_duration, ColorPolicy, Config};
 use crate::error::{AppError, AppResult};
 use crate::model::{BuildMode, CaseSelector, OutputTarget, RunRequest, StressRequest};
@@ -52,6 +53,7 @@ pub fn execute(command: CliCommand, globals: GlobalOptions) -> AppResult<i32> {
         CliCommand::Case(args) => execute_case(args, globals),
         CliCommand::Compare(args) => execute_compare(args, globals),
         CliCommand::Stress(args) => execute_stress(args, globals),
+        CliCommand::Companion(args) => execute_companion(args, globals),
         CliCommand::Doctor => execute_doctor(globals),
         CliCommand::Completion(args) => {
             generate_completions(args.shell);
@@ -59,6 +61,22 @@ pub fn execute(command: CliCommand, globals: GlobalOptions) -> AppResult<i32> {
         }
         CliCommand::Complete(args) => execute_complete(args),
     }
+}
+
+fn execute_companion(args: CompanionArgs, globals: GlobalOptions) -> AppResult<i32> {
+    if args.port == 0 {
+        return Err(AppError::usage("--port must be between 1 and 65535"));
+    }
+    let wait = parse_duration(args.wait, "--wait").map_err(AppError::usage)?;
+    let source = resolve_source(&args.source).map_err(AppError::new)?;
+    if !source.path.is_file() {
+        return Err(AppError::new(format!(
+            "source file '{}' does not exist",
+            source.path.display()
+        )));
+    }
+    let (config, ui) = configured(Some(&source.path), globals)?;
+    companion::receive(&source, &config, &ui, args.port, wait)
 }
 
 fn execute_complete(args: CompleteArgs) -> AppResult<i32> {
@@ -340,22 +358,85 @@ pub fn run_saved_cases(
     }
     let product = build::build(source, build_mode, config, ui)?;
     let mut status = 0;
+    let mut judged = 0_usize;
+    let mut passed = 0_usize;
     for saved in selected {
         show_saved_case(&saved.path, ui)?;
-        let report = process::run(
+        let expected = cases::expected_path(source, saved.id);
+        let actual = expected
+            .is_file()
+            .then(|| temporary_path(config, &format!("case-{}-actual", saved.id)))
+            .transpose()?;
+        let output = actual
+            .as_ref()
+            .map(|path| OutputTarget::TeeFile(path.clone()))
+            .unwrap_or(OutputTarget::Inherit);
+        let report = match process::run(
             &RunRequest {
                 command: product.command.clone(),
-                input: Some(saved.path),
-                output: OutputTarget::Inherit,
+                input: Some(saved.path.clone()),
+                output,
                 timeout: config.timeout,
                 capture_input: None,
                 show_report: false,
             },
             ui,
-        )?;
+        ) {
+            Ok(report) => report,
+            Err(error) => {
+                if let Some(actual) = &actual {
+                    let _ = fs::remove_file(actual);
+                }
+                return Err(error);
+            }
+        };
         ui.case_report(&report);
         if report.exit_code != 0 {
             status = report.exit_code;
+        }
+        if let Some(actual) = actual {
+            judged += 1;
+            let comparison = if report.success() {
+                fs::read(&actual)
+                    .and_then(|actual| fs::read(&expected).map(|expected| actual == expected))
+            } else {
+                Ok(false)
+            };
+            let _ = fs::remove_file(&actual);
+            let matches = comparison?;
+            if matches {
+                passed += 1;
+                ui.success(format!(
+                    "Case #{} verdict: PASS · matches {}",
+                    saved.id,
+                    expected.display()
+                ));
+            } else {
+                let reason = if report.interrupted {
+                    "program interrupted".to_string()
+                } else if report.timed_out {
+                    "program timed out".to_string()
+                } else if report.exit_code != 0 {
+                    format!("program exited with status {}", report.exit_code)
+                } else {
+                    format!("output differs from {}", expected.display())
+                };
+                ui.failure(format!("Case #{} verdict: FAIL · {reason}", saved.id));
+                if status == 0 {
+                    status = 1;
+                }
+            }
+        }
+    }
+    if judged > 0 {
+        if passed == judged && status == 0 {
+            ui.success(format!(
+                "Verdict: PASS · {passed}/{judged} judged case(s) passed"
+            ));
+        } else {
+            ui.failure(format!(
+                "Verdict: FAIL · {passed}/{judged} judged case(s) passed"
+            ));
         }
     }
     Ok(status)

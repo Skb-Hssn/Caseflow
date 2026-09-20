@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-20
+
+### Added
+
+- Automatically judge `/test` and `run-cli test` cases when a matching
+  `<stem>.out<ID>` file exists, while continuing to stream the generated
+  output and leaving cases without expected output in run-only mode.
+- Added per-case PASS/FAIL results and a final aggregate verdict; any judged
+  mismatch, timeout, interruption, or runtime failure now makes testing fail.
+
+## [0.6.1] - 2026-09-20
+
+### Fixed
+
+- Stopped treating the visible viewport height as the excessive-output limit,
+  so build context and echoed input no longer cause a small program result to
+  display the live-output suppression warning.
+
+## [0.6.0] - 2026-09-20
+
+### Added
+
+- Added a loopback-only Competitive Companion receiver through `/companion`
+  and `run-cli companion SOURCE`, with configurable port and wait timeout.
+- Imported each browser sample as an append-only `.in<ID>`/`.out<ID>` pair,
+  preserving the extension's expected output for later comparison.
+
+### Changed
+
+- Deleting or clearing an imported case now also removes its paired expected
+  output file.
+
 ## [0.5.9] - 2026-09-20
 
 ### Added

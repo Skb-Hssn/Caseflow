@@ -41,6 +41,9 @@ const ENABLE_MOUSE_CLICKS: &str = "\x1b[?1007l\x1b[?1000h\x1b[?1006h";
 const ENABLE_NATIVE_SELECTION: &str = "\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l\x1b[?1007h";
 const DISABLE_MOUSE_TRACKING: &str = "\x1b[?1007l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 const LIVE_OUTPUT_BYTE_LIMIT: usize = 16 * 1024;
+// A short terminal should not make ordinary program output look excessive.
+// This remains low enough to stop tight short-line print loops promptly.
+const LIVE_OUTPUT_LINE_LIMIT: usize = 256;
 const FINAL_OUTPUT_LIMIT: usize = 8 * 1024;
 const OUTPUT_SUPPRESSED_NOTICE: &[u8] =
     b"\n  ! Output limit reached; further live output is suppressed. Press Ctrl-C to stop.\n";
@@ -244,11 +247,12 @@ pub fn capture_output<T>(
     let footer_rows = if mouse && height >= 4 { 2 } else { 1 };
     let header_rows =
         WORKSPACE_HEADER_ROWS.min(height.saturating_sub(footer_rows).saturating_sub(1));
-    let live_line_limit = height
+    let visible_line_limit = height
         .saturating_sub(footer_rows)
         .saturating_sub(header_rows)
         .saturating_sub(1)
         .max(1) as usize;
+    let live_line_limit = visible_line_limit.max(LIVE_OUTPUT_LINE_LIMIT);
     let reader = thread::spawn(move || capture_and_forward(reader_fd, forward_fd, live_line_limit));
     let result = action();
     let _ = io::stdout().flush();

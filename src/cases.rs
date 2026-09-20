@@ -23,6 +23,13 @@ pub struct SavedCase {
 }
 
 #[derive(Debug, Clone)]
+pub struct ImportedSample {
+    pub id: u64,
+    pub input: PathBuf,
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub enum ExternalEditOutcome {
     Added(SavedCase),
     Updated(SavedCase),
@@ -179,6 +186,59 @@ pub fn save_bytes(
     require(source, id)
 }
 
+pub fn import_samples(
+    source: &SourceSpec,
+    samples: &[(&[u8], &[u8])],
+    config: &Config,
+) -> AppResult<Vec<ImportedSample>> {
+    if samples.is_empty() {
+        return Err(AppError::new("no sample tests were provided"));
+    }
+    let _lock = lock_cases(source, config)?;
+    let mut id = next_id(source)?;
+    let mut imported = Vec::with_capacity(samples.len());
+    for (index, (input, output)) in samples.iter().enumerate() {
+        while case_path(source, id).exists() || expected_path(source, id).exists() {
+            id = id
+                .checked_add(1)
+                .ok_or_else(|| AppError::new("saved case ID overflow"))?;
+        }
+        let input_path = case_path(source, id);
+        let output_path = expected_path(source, id);
+        if let Err(error) = atomic_write(&input_path, input) {
+            rollback_import(&imported);
+            return Err(error);
+        }
+        if let Err(error) = atomic_write(&output_path, output) {
+            let _ = fs::remove_file(&input_path);
+            rollback_import(&imported);
+            return Err(error);
+        }
+        imported.push(ImportedSample {
+            id,
+            input: input_path,
+            output: output_path,
+        });
+        if index + 1 < samples.len() {
+            id = match id.checked_add(1) {
+                Some(next) => next,
+                None => {
+                    rollback_import(&imported);
+                    return Err(AppError::new("saved case ID overflow"));
+                }
+            };
+        }
+    }
+    Ok(imported)
+}
+
+fn rollback_import(imported: &[ImportedSample]) {
+    for sample in imported {
+        let _ = fs::remove_file(&sample.input);
+        let _ = fs::remove_file(&sample.output);
+    }
+}
+
 pub fn save_file_as_next(
     source: &SourceSpec,
     captured: &Path,
@@ -199,6 +259,15 @@ pub fn delete(source: &SourceSpec, id: u64, config: &Config) -> AppResult<PathBu
     fs::remove_file(&saved.path).map_err(|error| {
         AppError::new(format!("cannot delete '{}': {error}", saved.path.display()))
     })?;
+    let output = expected_path(source, id);
+    if let Err(error) = fs::remove_file(&output) {
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(AppError::new(format!(
+                "cannot delete expected output '{}': {error}",
+                output.display()
+            )));
+        }
+    }
     Ok(saved.path)
 }
 
@@ -210,6 +279,15 @@ pub fn clear(source: &SourceSpec, config: &Config) -> AppResult<Vec<PathBuf>> {
         fs::remove_file(&saved.path).map_err(|error| {
             AppError::new(format!("cannot delete '{}': {error}", saved.path.display()))
         })?;
+        let output = expected_path(source, saved.id);
+        if let Err(error) = fs::remove_file(&output) {
+            if error.kind() != io::ErrorKind::NotFound {
+                return Err(AppError::new(format!(
+                    "cannot delete expected output '{}': {error}",
+                    output.display()
+                )));
+            }
+        }
         deleted.push(saved.path);
     }
     Ok(deleted)
@@ -455,6 +533,10 @@ pub fn case_path(source: &SourceSpec, id: u64) -> PathBuf {
     PathBuf::from(format!("{}.in{id}", source.stem.display()))
 }
 
+pub fn expected_path(source: &SourceSpec, id: u64) -> PathBuf {
+    PathBuf::from(format!("{}.out{id}", source.stem.display()))
+}
+
 pub fn command_exists(command: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|path| path.join(command).is_file()))
@@ -547,5 +629,31 @@ mod tests {
         let source = resolve_source("a.cpp").unwrap();
         assert_eq!(parent_or_current(&source.stem), Path::new("."));
         assert_eq!(case_path(&source, 1), PathBuf::from("a.in1"));
+        assert_eq!(expected_path(&source, 1), PathBuf::from("a.out1"));
+    }
+
+    #[test]
+    fn companion_samples_are_imported_as_input_output_pairs() {
+        let directory = unique_dir();
+        fs::create_dir_all(&directory).unwrap();
+        let source = resolve_source(directory.join("a.cpp")).unwrap();
+        fs::write(case_path(&source, 1), "existing\n").unwrap();
+        let config = Config {
+            cache_dir: directory.join("cache"),
+            ..Config::default()
+        };
+        let imported = import_samples(
+            &source,
+            &[(b"2 3\n".as_slice(), b"5\n".as_slice())],
+            &config,
+        )
+        .unwrap();
+        assert_eq!(imported[0].id, 2);
+        assert_eq!(fs::read(&imported[0].input).unwrap(), b"2 3\n");
+        assert_eq!(fs::read(&imported[0].output).unwrap(), b"5\n");
+        delete(&source, 2, &config).unwrap();
+        assert!(!imported[0].input.exists());
+        assert!(!imported[0].output.exists());
+        let _ = fs::remove_dir_all(directory);
     }
 }

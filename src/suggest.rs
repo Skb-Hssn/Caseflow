@@ -9,6 +9,7 @@ const REPL_COMMANDS: &[(&str, &str)] = &[
     ("/case", "manage saved cases"),
     ("/compare", "compare a saved case"),
     ("/stress", "run differential stress tests"),
+    ("/companion", "import samples from Competitive Companion"),
     ("/open", "switch the active source"),
     ("/debug", "toggle debug builds"),
     ("/mouse", "toggle mouse controls"),
@@ -27,6 +28,7 @@ const CLI_COMMANDS: &[(&str, &str)] = &[
     ("case", "manage saved cases"),
     ("compare", "compare a saved case"),
     ("stress", "run differential stress tests"),
+    ("companion", "import samples from Competitive Companion"),
     ("doctor", "inspect installed tools"),
     ("completion", "generate shell completion"),
 ];
@@ -40,6 +42,7 @@ const HELP_TOPICS: &[(&str, &str)] = &[
     ("case", "manage saved cases"),
     ("compare", "compare a saved case"),
     ("stress", "run differential stress tests"),
+    ("companion", "import samples from Competitive Companion"),
     ("open", "switch the active source"),
     ("debug", "toggle debug builds"),
     ("mouse", "toggle mouse controls"),
@@ -248,7 +251,7 @@ fn expected_path_kind(tokens: &[String], trailing_space: bool, repl: bool) -> Op
                 }
             }
         }
-        "build" | "test" if relative == 1 => Some(PathKind::Source),
+        "build" | "test" | "companion" if relative == 1 => Some(PathKind::Source),
         "compare" | "diff" if relative == 1 => Some(PathKind::Source),
         "compare" | "diff" if relative == 3 => Some(PathKind::Expected),
         "stress" if relative == 1 => Some(PathKind::Source),
@@ -314,6 +317,7 @@ fn expected_literals(
         "/run" => repl_run_options_only(),
         "/case" => repl_case_options(tokens, command_index),
         "/stress" => stress_options(),
+        "/companion" => companion_options(),
         "/help" => HELP_TOPICS.to_vec(),
         "run" | "exec"
             if tokens[command_index + 1..]
@@ -332,6 +336,7 @@ fn expected_literals(
         "case" if relative <= 1 => case_actions(),
         "case" => cli_case_options(tokens, command_index),
         "stress" => stress_options(),
+        "companion" => companion_options(),
         "completion" | "completions" => vec![
             ("bash", "Bash completion"),
             ("elvish", "Elvish completion"),
@@ -341,6 +346,13 @@ fn expected_literals(
         ],
         _ => Vec::new(),
     }
+}
+
+fn companion_options() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("--port", "set the local receiver port"),
+        ("--wait", "set how long to wait for a problem"),
+    ]
 }
 
 fn run_options() -> Vec<(&'static str, &'static str)> {

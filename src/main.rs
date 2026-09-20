@@ -2,6 +2,7 @@ mod build;
 mod cases;
 mod cli;
 mod commands;
+mod companion;
 mod config;
 mod editor;
 mod error;
