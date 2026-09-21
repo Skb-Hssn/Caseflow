@@ -674,6 +674,8 @@ fn render_workspace(
     let (width, height) = terminal::size().unwrap_or((80, 24));
     let width = width.max(1);
     let height = height.max(1);
+    // Keep the toolbar and prompt in a compact fixed footer so the output
+    // viewport has as much room as possible while controls stay stable.
     let show_toolbar = options.show_toolbar && height >= 4;
     let footer_rows = if show_toolbar { 2 } else { 1 };
     let header_rows = terminal_state::WORKSPACE_HEADER_ROWS
@@ -1210,6 +1212,7 @@ fn draw_toolbar(
             options.case_ids,
             ToolbarDensity::Tiny,
             color,
+            theme::PRIMARY_SOFT,
             &mut column,
             layout,
         )?;
@@ -1219,7 +1222,7 @@ fn draw_toolbar(
             EditorAction::ToggleDebug,
             color,
             if options.debug {
-                theme::PRIMARY
+                theme::SUCCESS
             } else {
                 theme::SURFACE
             },
@@ -1232,7 +1235,7 @@ fn draw_toolbar(
             EditorAction::SelectText,
             color,
             if options.selection_mode {
-                theme::PRIMARY
+                theme::PRIMARY_SOFT
             } else {
                 theme::SURFACE
             },
@@ -1266,6 +1269,7 @@ fn draw_toolbar(
             options.case_ids,
             ToolbarDensity::Compact,
             color,
+            theme::PRIMARY_SOFT,
             &mut column,
             layout,
         )?;
@@ -1276,7 +1280,7 @@ fn draw_toolbar(
             EditorAction::ToggleDebug,
             color,
             if options.debug {
-                theme::PRIMARY
+                theme::SUCCESS
             } else {
                 theme::SURFACE
             },
@@ -1290,7 +1294,7 @@ fn draw_toolbar(
             EditorAction::SelectText,
             color,
             if options.selection_mode {
-                theme::PRIMARY
+                theme::PRIMARY_SOFT
             } else {
                 theme::SURFACE
             },
@@ -1301,7 +1305,7 @@ fn draw_toolbar(
         draw_toolbar_text(output, " Run  ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[Interactive]",
+            "[Int]",
             EditorAction::RunInteractive,
             color,
             theme::PRIMARY,
@@ -1311,7 +1315,7 @@ fn draw_toolbar(
         draw_toolbar_text(output, " ", color, &mut column)?;
         draw_toolbar_action(
             output,
-            "[Clipboard]",
+            "[Clip]",
             EditorAction::RunClipboard,
             color,
             theme::PRIMARY,
@@ -1325,6 +1329,7 @@ fn draw_toolbar(
             options.case_ids,
             ToolbarDensity::Full,
             color,
+            theme::PRIMARY_SOFT,
             &mut column,
             layout,
         )?;
@@ -1335,7 +1340,7 @@ fn draw_toolbar(
             EditorAction::ToggleDebug,
             color,
             if options.debug {
-                theme::PRIMARY
+                theme::SUCCESS
             } else {
                 theme::SURFACE
             },
@@ -1349,7 +1354,7 @@ fn draw_toolbar(
             EditorAction::SelectText,
             color,
             if options.selection_mode {
-                theme::PRIMARY
+                theme::PRIMARY_SOFT
             } else {
                 theme::SURFACE
             },
@@ -1360,12 +1365,14 @@ fn draw_toolbar(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_test_actions(
     output: &mut impl Write,
     width: u16,
     case_ids: &[u64],
     density: ToolbarDensity,
     color: bool,
+    background: Color,
     column: &mut u16,
     layout: &mut Layout,
 ) -> AppResult<()> {
@@ -1392,7 +1399,7 @@ fn draw_test_actions(
             &label,
             EditorAction::TestCase(*id),
             color,
-            theme::PRIMARY,
+            background,
             column,
             layout,
         )?;
@@ -1407,7 +1414,7 @@ fn draw_test_actions(
             all_label,
             EditorAction::TestAll,
             color,
-            theme::PRIMARY,
+            background,
             column,
             layout,
         )?;

@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-21
+
+### Changed
+
+- Restored the compact toolbar layout so the command prompt sits directly
+  below the controls.
+- Refined toolbar colors to distinguish run, test, debug, and selection
+  actions while preserving the existing mouse targets.
+
+## [0.9.1] - 2026-09-21
+
+### Changed
+
+- Refined the mouse toolbar layout with a dedicated spacing row before the
+  command prompt, keeping controls and input visually separate while output
+  remains scrollable.
+- Adjusted the fixed footer and live-output viewport for the new layout and
+  kept toolbar hit targets aligned after resizing.
+
 ## [0.9.0] - 2026-09-21
 
 ### Added

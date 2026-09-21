@@ -509,8 +509,8 @@ fn persistent_mouse_toolbar_runs_the_active_source() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('toolbar-run')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[Interactive]");
-    // The toolbar is fixed above the command row; this lands inside Interactive.
+    session.wait_for("[Int]");
+    // The toolbar is fixed above the command row; this lands inside Int.
     session.send(b"\x1b[<0;10;23M");
     session.wait_for("toolbar-run");
     session.wait_for("Success (exit 0)");
@@ -523,7 +523,7 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[Interactive]");
+    session.wait_for("[Int]");
     assert!(
         !session.text().contains("\x1b[?1003h"),
         "mouse mode must not enable all-motion tracking"
@@ -533,11 +533,11 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
     session.send(b"\x1b[<35;50;10M");
     thread::sleep(Duration::from_millis(100));
     assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
-    assert_eq!(session.text().matches("[Interactive]").count(), 1);
+    assert_eq!(session.text().matches("[Int]").count(), 1);
     session.send(b"/xyz");
     session.wait_for("/xyz");
     assert_eq!(
-        session.text().matches("[Interactive]").count(),
+        session.text().matches("[Int]").count(),
         1,
         "toolbar should remain static during prompt redraws"
     );
@@ -553,7 +553,7 @@ fn debug_toolbar_button_toggles_build_mode() {
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[Off]");
     assert!(!session.text().contains("[ Build ]"));
-    session.send(b"\x1b[<0;56;23M");
+    session.send(b"\x1b[<0;44;23M");
     session.wait_for("Build mode: debug");
     session.wait_for("[On]");
     session.send(b"/quit\r");
@@ -607,8 +607,8 @@ fn mouse_toolbar_runs_a_specific_numbered_case() {
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[7]");
     session.wait_for("[All]");
-    // The first numbered case begins at zero-based column 40 on the full bar.
-    session.send(b"\x1b[<0;42;23M");
+    // The first numbered case begins near column 28 on the compact full bar.
+    session.send(b"\x1b[<0;29;23M");
     session.wait_for("File ·");
     session.wait_for("Input");
     session.wait_for("Output");
@@ -628,7 +628,7 @@ fn select_button_releases_mouse_for_native_copying() {
     session.send(b"/help\r");
     session.wait_for("KEYS");
     session.wait_for("run-cli:main.py");
-    session.send(b"\x1b[<0;64;23M");
+    session.send(b"\x1b[<0;53;23M");
     session.wait_for("wheel/↑↓ scroll");
     assert!(session.text().contains("\x1b[?1007h"));
     // Alternate-scroll mode translates the wheel to cursor keys while native
@@ -650,7 +650,7 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
         "for index in range(40):\n    print(f'line-{index:02}')\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("[Interactive]");
+    session.wait_for("[Int]");
     session.send(b"/run\r");
     session.wait_for("Success (exit 0)");
     session.wait_for("run-cli:main.py");
@@ -662,7 +662,7 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     let before_len = before.len();
     let title = format!(" run-cli  v{}  ·  ", env!("CARGO_PKG_VERSION"));
     let header_count = before.matches(&title).count();
-    let toolbar_count = before.matches("[Interactive]").count();
+    let toolbar_count = before.matches("[Int]").count();
     for _ in 0..8 {
         session.send(b"\x1b[<64;50;10M");
     }
@@ -672,7 +672,7 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     assert!(scrolled_render.contains("line-10"));
     assert!(scrolled_render.contains('↑'));
     assert_eq!(after.matches(&title).count(), header_count);
-    assert_eq!(after.matches("[Interactive]").count(), toolbar_count);
+    assert_eq!(after.matches("[Int]").count(), toolbar_count);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
@@ -791,7 +791,7 @@ fn canonical_session_controls_work_from_the_keyboard() {
     session.send(b"/mouse\r");
     session.wait_for_sequence_since(
         command_start,
-        &["Mouse controls: on", "[Interactive]", "run-cli:main.py"],
+        &["Mouse controls: on", "[Int]", "run-cli:main.py"],
     );
     let command_start = session.output_len();
     session.send(b"/mouse\r");
