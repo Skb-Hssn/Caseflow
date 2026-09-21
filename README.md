@@ -38,28 +38,32 @@ artifacts outside the solution directory.
 - [Interactive workspace](#interactive-workspace)
 - [Saved cases and verdicts](#saved-cases-and-verdicts)
 - [One-shot commands](#one-shot-commands)
+- [Clipboard workflows](#clipboard-workflows)
 - [Competitive Companion](#competitive-companion)
 - [Stress testing](#stress-testing)
 - [Configuration](#configuration)
 - [Shell completion](#shell-completion)
+- [Compatibility aliases](#compatibility-aliases)
+- [Safety and process behavior](#safety-and-process-behavior)
 - [Exit statuses](#exit-statuses)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
+- [License](#license)
 
 ## Requirements
 
 Caseflow itself is a native Rust program, but each language requires its own
 compiler or runtime. Install only the tools you use.
 
-| Language | Extension | Default tools |
-| --- | --- | --- |
-| C++ | `.cpp` | `g++` |
-| C | `.c` | `gcc` |
-| Python | `.py` | `python3` |
-| Java | `.java` | `javac`, `java` |
-| Rust | `.rs` | `rustc` |
-| Go | `.go` | `go` |
-| Kotlin | `.kt` | `kotlinc`, `java` |
+| Language | Extension | Default tools         |
+| -------- | --------- | --------------------- |
+| C++      | `.cpp`  | `g++`               |
+| C        | `.c`    | `gcc`               |
+| Python   | `.py`   | `python3`           |
+| Java     | `.java` | `javac`, `java`   |
+| Rust     | `.rs`   | `rustc`             |
+| Go       | `.go`   | `go`                |
+| Kotlin   | `.kt`   | `kotlinc`, `java` |
 
 Optional integrations use:
 
@@ -85,8 +89,9 @@ Tagged releases produce archives for:
 - `x86_64-unknown-linux-gnu`
 - `x86_64-unknown-linux-musl`
 
-Download the archive for your system from this repository's GitHub Releases
-page, extract it, and place `run-cli` somewhere on `PATH`:
+Download the archive for your system from the
+[GitHub Releases page](https://github.com/Skb-Hssn/Caseflow/releases), extract
+it, and place `run-cli` somewhere on `PATH`:
 
 ```sh
 tar -xzf run-cli-v*-x86_64-unknown-linux-gnu.tar.gz
@@ -106,10 +111,11 @@ distribution.
 
 ### Install from source
 
-Install a current stable Rust toolchain, clone or download this repository,
-and run:
+Install a current stable Rust toolchain, then clone and install the project:
 
 ```sh
+git clone https://github.com/Skb-Hssn/Caseflow.git
+cd Caseflow
 cargo install --path . --locked
 run-cli --version
 run-cli doctor
@@ -151,6 +157,8 @@ At the source-less prompt, run:
 
 The contest receiver creates `A.cpp`, `B.cpp`, and the corresponding sample
 case files in that directory, then opens the normal workspace on `A.cpp`.
+Until the contest has been received, a source-less session intentionally
+accepts only `/contest`, `/help`, and `/exit` (or `/quit`). Ctrl-D also exits.
 
 Then enter:
 
@@ -205,15 +213,15 @@ fuzzy source picker.
 Caseflow resolves the language from the source extension. Compiled artifacts
 are stored below the XDG cache directory, not beside the source.
 
-| Language | Standard mode | Debug mode |
-| --- | --- | --- |
-| C++ | C++17, warnings, `LOCAL` | Debug symbols, libstdc++ checks, ASan, UBSan, stronger warnings |
-| C | C17 and warnings | Debug symbols, ASan, UBSan, stronger warnings |
-| Python | `python3 SOURCE` | `python3 -X dev SOURCE` |
-| Rust | Rust 2021 | Debug information, assertions, overflow checks |
-| Go | Normal `go build` | Race detector and disabled optimizations/inlining |
-| Java | Compiled classes and discovered package/class name | Debug information, linting, assertions |
-| Kotlin | Executable JAR | Kotlin/JVM debug options and assertions |
+| Language | Standard mode                                      | Debug mode                                                      |
+| -------- | -------------------------------------------------- | --------------------------------------------------------------- |
+| C++      | C++17, warnings,`LOCAL`                          | Debug symbols, libstdc++ checks, ASan, UBSan, stronger warnings |
+| C        | C17 and warnings                                   | Debug symbols, ASan, UBSan, stronger warnings                   |
+| Python   | `python3 SOURCE`                                 | `python3 -X dev SOURCE`                                       |
+| Rust     | Rust 2021                                          | Debug information, assertions, overflow checks                  |
+| Go       | Normal`go build`                                 | Race detector and disabled optimizations/inlining               |
+| Java     | Compiled classes and discovered package/class name | Debug information, linting, assertions                          |
+| Kotlin   | Executable JAR                                     | Kotlin/JVM debug options and assertions                         |
 
 Use standard mode for normal submissions and debug mode while diagnosing
 undefined behavior or assertion failures:
@@ -257,33 +265,33 @@ signals.
 
 ### Slash commands
 
-| Command | Purpose |
-| --- | --- |
-| `/run [interactive] [OPTIONS]` | Build when needed and run with terminal input. |
-| `/run clipboard [OPTIONS]` | Append clipboard input as the next saved case and run it. |
-| `/build` | Compile the active source without running it. |
-| `/test [all\|last\|ID ...]` | Run all cases or selected saved-case IDs. |
-| `/case list` | List saved inputs for the active source stem. |
-| `/case show ID` | Print a saved input. |
-| `/case copy ID` | Copy a saved input to the clipboard. |
-| `/case paste [ID] [--run]` | Append clipboard input, or replace a specified ID. |
-| `/case add` | Create the next saved input in an external editor. |
-| `/case edit ID` | Edit an existing input in an external editor. |
-| `/case delete ID` | Confirm and delete an input and its paired expected output. |
-| `/case clear` | Confirm and delete every case for the active source. |
-| `/compare ID EXPECTED` | Run one case and compare it with an arbitrary expected file. |
-| `/stress BRUTE GENERATOR [OPTIONS]` | Differentially test against a trusted solution. |
-| `/contest [DIRECTORY] [OPTIONS]` | Download a complete contest; source-less sessions use `DIRECTORY` for generated files. |
-| `/companion [contest] [OPTIONS]` | Import one problem or a complete Competitive Companion contest batch. |
-| `/open [PATH]` | Switch source; omit the path to open the fuzzy picker. |
-| `/debug [on\|off\|toggle]` | Inspect or change the session build mode. |
-| `/mouse [on\|off\|toggle]` | Enable or disable mouse controls. |
-| `/again` | Repeat the latest `/run` or `/test`. |
-| `/clear` | Clear retained output from the viewport. |
-| `/status` | Show the active source, language, mode, cases, mouse state, and cache. |
-| `/doctor` | Inspect configured compilers, runtimes, and clipboard tools. |
-| `/help [COMMAND]` | Show general or command-specific help. |
-| `/exit` | Leave Caseflow and restore the terminal. |
+| Command                               | Purpose                                                                                                                                       |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/run [interactive] [OPTIONS]`      | Build when needed and run with terminal input.                                                                                                |
+| `/run clipboard [OPTIONS]`          | Append clipboard input as the next saved case and run it.                                                                                     |
+| `/build`                            | Compile the active source without running it.                                                                                                 |
+| `/test [all\|last\|ID ...]`           | Run all cases or selected saved-case IDs.                                                                                                     |
+| `/case list`                        | List saved inputs for the active source stem.                                                                                                 |
+| `/case show ID`                     | Print a saved input.                                                                                                                          |
+| `/case copy ID`                     | Copy a saved input to the clipboard.                                                                                                          |
+| `/case paste [ID] [--run]`          | Append clipboard input, or replace a specified ID.                                                                                            |
+| `/case add`                         | Create the next saved input in an external editor.                                                                                            |
+| `/case edit ID`                     | Edit an existing input in an external editor.                                                                                                 |
+| `/case delete ID`                   | Confirm and delete an input and its paired expected output.                                                                                   |
+| `/case clear`                       | Confirm and delete every case for the active source.                                                                                          |
+| `/compare ID EXPECTED`              | Run one case and compare it with an arbitrary expected file.                                                                                  |
+| `/stress BRUTE GENERATOR [OPTIONS]` | Differentially test against a trusted solution.                                                                                               |
+| `/contest [OPTIONS]`                | Download a complete contest using the active source as the first problem. In a source-less session, it also accepts an optional`DIRECTORY`. |
+| `/companion [contest] [OPTIONS]`    | Import one problem or a complete Competitive Companion contest batch.                                                                         |
+| `/open [PATH]`                      | Switch source; omit the path to open the fuzzy picker.                                                                                        |
+| `/debug [on\|off\|toggle]`            | Inspect or change the session build mode.                                                                                                     |
+| `/mouse [on\|off\|toggle]`            | Enable or disable mouse controls.                                                                                                             |
+| `/again`                            | Repeat the latest`/run` or `/test`.                                                                                                       |
+| `/clear`                            | Clear retained output from the viewport.                                                                                                      |
+| `/status`                           | Show the active source, language, mode, cases, mouse state, and cache.                                                                        |
+| `/doctor`                           | Inspect configured compilers, runtimes, and clipboard tools.                                                                                  |
+| `/help [COMMAND]`                   | Show general or command-specific help.                                                                                                        |
+| `/exit`                             | Leave Caseflow and restore the terminal.                                                                                                      |
 
 Run options inside the workspace are the same as the corresponding one-shot
 options after the source argument:
@@ -295,6 +303,14 @@ options after the source argument:
 /run --input sample.in --output answer.out
 /run clipboard --timeout 2
 ```
+
+### Run versus test
+
+Use `/run` for one execution with interactive input, clipboard input, or an
+explicit input file. Use `/test` for repeatable saved cases discovered from
+`<stem>.in<ID>` files. A test also checks the matching `<stem>.out<ID>` when
+that file exists. `/run clipboard` is the bridge between both workflows: it
+appends the clipboard as the next saved case and immediately runs that case.
 
 ### Suggestions and history
 
@@ -315,17 +331,17 @@ latest 1,000 commands.
 
 ### Keyboard controls
 
-| Key | Behavior |
-| --- | --- |
-| `Tab` | Accept a suggestion or activate a suggestion list. |
-| `Up` / `Down` | Navigate suggestions, or command history when no menu is open. |
-| `Enter` | Submit the typed command; in an active picker, select the item. |
-| `Esc` | Close suggestions, cancel a picker, or leave native selection mode. |
-| `Ctrl-A` / `Ctrl-E` | Move to the beginning or end of the command line. |
-| `Home` / `End` | Move to the beginning or end; in selection mode, scroll fully. |
-| `Page Up` / `Page Down` | Scroll retained output in selection mode. |
-| `Ctrl-C` | Clear an idle command or stop the active process and return. |
-| `Ctrl-D` | Exit when the command line is empty. |
+| Key                         | Behavior                                                            |
+| --------------------------- | ------------------------------------------------------------------- |
+| `Tab`                     | Accept a suggestion or activate a suggestion list.                  |
+| `Up` / `Down`           | Navigate suggestions, or command history when no menu is open.      |
+| `Enter`                   | Submit the typed command; in an active picker, select the item.     |
+| `Esc`                     | Close suggestions, cancel a picker, or leave native selection mode. |
+| `Ctrl-A` / `Ctrl-E`     | Move to the beginning or end of the command line.                   |
+| `Home` / `End`          | Move to the beginning or end; in selection mode, scroll fully.      |
+| `Page Up` / `Page Down` | Scroll retained output in selection mode.                           |
+| `Ctrl-C`                  | Clear an idle command or stop the active process and return.        |
+| `Ctrl-D`                  | Exit when the command line is empty.                                |
 
 ### Mouse controls and text selection
 
@@ -344,13 +360,17 @@ run-cli --mouse A.cpp
 mouse = true
 ```
 
-The fixed toolbar exposes:
+The fixed toolbar exposes the following compact controls:
 
-- **Run → Interactive**
-- **Run → Clipboard**
-- **Test → numbered cases and All**
-- **Debug → On/Off**
-- **Select** for native terminal selection and copying
+- **Run `[Int]`** starts an interactive run.
+- **Run `[Clip]`** appends clipboard input as a case and runs it.
+- **Test `[1]`, `[2]`, ... `[All]`** runs one saved case or every case.
+- **Debug `[Off]` / `[On]`** toggles the persistent build mode.
+- **`[Select]`** releases the mouse for native terminal selection and copying.
+
+Run controls use the primary accent, saved tests use a softer accent, active
+debug mode is green, and inactive state controls remain neutral. The toolbar
+and prompt stay fixed on adjacent rows while only the output viewport scrolls.
 
 The toolbar becomes more compact on narrow terminals. Mouse reporting is
 enabled only while Caseflow owns the workspace and is disabled while a child
@@ -518,16 +538,22 @@ The general form is:
 run-cli [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
 ```
 
-Global options are accepted with subcommands:
+These global execution options are accepted before or after subcommands:
 
-| Option | Meaning |
-| --- | --- |
-| `--debug` | Use debug compiler/runtime settings. |
-| `--mouse` | Enable mouse controls when an interactive UI is opened. |
-| `--no-source` | Start an interactive workspace without an existing source. |
-| `--color auto\|always\|never` | Set color output policy. |
-| `-h`, `--help` | Show help. |
-| `-V`, `--version` | Show the installed version. |
+| Option                        | Meaning                                                 |
+| ----------------------------- | ------------------------------------------------------- |
+| `--debug`                   | Use debug compiler/runtime settings.                    |
+| `--mouse`                   | Enable mouse controls when an interactive UI is opened. |
+| `--color auto\|always\|never` | Set color output policy.                                |
+
+`--no-source` is a top-level session option rather than a subcommand option:
+
+```sh
+run-cli --no-source
+```
+
+Use `run-cli --help` for top-level help, `run-cli COMMAND --help` for a
+subcommand, and `run-cli --version` for the installed version.
 
 ### Run
 
@@ -649,6 +675,19 @@ Clipboard command failures do not create or replace case files.
 Caseflow supports the documented custom-tool protocol from
 [Competitive Companion](https://github.com/jmerle/competitive-companion).
 
+### Which command should I use?
+
+| Situation                                   | Command                                              | Result                                                                                                 |
+| ------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Import one problem into the active source   | `/companion`                                       | Receives one payload and appends its samples to the active source stem.                                |
+| Import a full contest from a normal session | `/contest`                                         | Uses the active source for the first problem and derives the remaining source names.                   |
+| Equivalent explicit contest form            | `/companion contest`                               | Performs the same complete-batch import as`/contest`.                                                |
+| Create a new contest workspace              | `run-cli --no-source`, then `/contest DIRECTORY` | Creates the directory, generates`A.cpp`, `B.cpp`, and so on, imports samples, and opens `A.cpp`. |
+| Import from a script or normal shell        | `run-cli companion SOURCE [--contest]`             | Runs the receiver without opening the workspace.                                                       |
+
+`/contest` is therefore the convenient full-contest workflow. `/companion` is
+the general receiver and defaults to one problem unless `contest` is supplied.
+
 ### Import from the interactive workspace
 
 Open the solution:
@@ -674,13 +713,28 @@ run-cli companion A.cpp
 
 While the command is waiting, click the extension button.
 
-To import an entire contest, use contest mode, open the contest page, and
-click the extension button. Competitive Companion then sends one request for
-each problem in the batch:
+To import an entire contest from an active-source session, open the contest
+page, start contest mode, and click the extension button. Competitive
+Companion then sends one request for each problem in the batch:
 
 ```text
-/companion contest
+/contest
 ```
+
+`/companion contest` is an equivalent spelling.
+
+To create a new workspace before any source exists:
+
+```sh
+run-cli --no-source
+```
+
+```text
+/contest contests/spring-round
+```
+
+Caseflow creates the directory if necessary, generates editable source
+placeholders, imports every sample pair, and opens the session on `A.cpp`.
 
 Contest mode uses Competitive Companion's shared batch ID and problem count to
 keep collecting requests. It does not write any files until every expected
@@ -845,19 +899,19 @@ Flag arrays replace the corresponding built-in list; they are not appended.
 
 ### Environment variables
 
-| Variable | Overrides |
-| --- | --- |
-| `CXX` | C++ compiler |
-| `CC` | C compiler |
-| `PYTHON` | Python interpreter |
-| `JAVAC` | Java compiler |
-| `JAVA` | Java/Kotlin runtime |
-| `RUSTC` | Rust compiler |
-| `GO` | Go tool |
-| `KOTLINC` | Kotlin compiler |
-| `NO_COLOR` | Disables color unless a later CLI color option overrides it |
-| `STRESS_LIMIT` | Default positive stress iteration count |
-| `STRESS_TIMEOUT` | Default positive per-process stress timeout in seconds |
+| Variable           | Overrides                                                   |
+| ------------------ | ----------------------------------------------------------- |
+| `CXX`            | C++ compiler                                                |
+| `CC`             | C compiler                                                  |
+| `PYTHON`         | Python interpreter                                          |
+| `JAVAC`          | Java compiler                                               |
+| `JAVA`           | Java/Kotlin runtime                                         |
+| `RUSTC`          | Rust compiler                                               |
+| `GO`             | Go tool                                                     |
+| `KOTLINC`        | Kotlin compiler                                             |
+| `NO_COLOR`       | Disables color unless a later CLI color option overrides it |
+| `STRESS_LIMIT`   | Default positive stress iteration count                     |
+| `STRESS_TIMEOUT` | Default positive per-process stress timeout in seconds      |
 
 ### Cache and state directories
 
@@ -950,14 +1004,14 @@ reference.
 
 ## Exit statuses
 
-| Status | Meaning |
-| --- | --- |
-| `0` | Successful operation or all judged cases passed. |
-| `1` | Output mismatch, stress mismatch, missing doctor dependency, or general failure. |
-| `2` | Invalid command, option, selector, or configuration. |
-| `124` | Execution or listener wait timed out. |
-| `130` | Interrupted with Ctrl-C. |
-| Other | Compiler or child-program exit status, normalized to the shell range. |
+| Status  | Meaning                                                                          |
+| ------- | -------------------------------------------------------------------------------- |
+| `0`   | Successful operation or all judged cases passed.                                 |
+| `1`   | Output mismatch, stress mismatch, missing doctor dependency, or general failure. |
+| `2`   | Invalid command, option, selector, or configuration.                             |
+| `124` | Execution or listener wait timed out.                                            |
+| `130` | Interrupted with Ctrl-C.                                                         |
+| Other   | Compiler or child-program exit status, normalized to the shell range.            |
 
 For a mixed test selection, any judged mismatch or abnormal execution makes
 the overall command fail even though later cases may still run.
