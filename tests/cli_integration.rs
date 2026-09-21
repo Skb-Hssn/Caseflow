@@ -641,3 +641,109 @@ fn competitive_companion_imports_paired_samples_without_overwriting() {
     );
     assert!(String::from_utf8_lossy(&output.stderr).contains("Imported 2 sample(s)"));
 }
+
+#[test]
+fn competitive_companion_collects_a_complete_contest_batch() {
+    let directory = TempDir::new().unwrap();
+    let source = directory.path().join("A.cpp");
+    fs::write(
+        &source,
+        "#include <iostream>\nint main(){std::cout << 1; }\n",
+    )
+    .unwrap();
+    let Some(port) = unused_loopback_port() else {
+        return;
+    };
+    let child = command(&directory)
+        .arg("companion")
+        .arg(&source)
+        .arg("--contest")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--wait")
+        .arg("5")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let send = |name: &str, input: &str, output: &str| {
+        let body = format!(
+            r#"{{"name":"{name}","group":"Contest","url":"https://example.test/{name}","interactive":false,"memoryLimit":256,"timeLimit":1000,"tests":[{{"input":"{input}","output":"{output}"}}],"batch":{{"id":"contest-1","size":2}}}}"#
+        );
+        let mut stream = connect_with_retry(port);
+        write!(
+            stream,
+            "POST / HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body.as_bytes()).unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    };
+    send("A - First", r#"1\n"#, r#"one\n"#);
+    send("B - Second", r#"2\n"#, r#"two\n"#);
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(directory.path().join("A.in1")).unwrap(), b"1\n");
+    assert_eq!(fs::read(directory.path().join("A.out1")).unwrap(), b"one\n");
+    assert_eq!(fs::read(directory.path().join("B.in1")).unwrap(), b"2\n");
+    assert_eq!(fs::read(directory.path().join("B.out1")).unwrap(), b"two\n");
+    assert!(directory.path().join("B.cpp").is_file());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Imported contest batch 'contest-1'"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("A.cpp"), "{stderr}");
+    assert!(stderr.contains("B.cpp"), "{stderr}");
+}
+
+#[test]
+fn competitive_companion_contest_without_source_creates_a_workspace() {
+    let directory = TempDir::new().unwrap();
+    let Some(port) = unused_loopback_port() else {
+        return;
+    };
+    let mut command = command(&directory);
+    command.current_dir(directory.path());
+    let child = command
+        .arg("companion")
+        .arg("--contest")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--wait")
+        .arg("5")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let body = br#"{"name":"Standalone","tests":[{"input":"7\n","output":"49\n"}],"batch":{"id":"contest-single","size":1}}"#;
+    let mut stream = connect_with_retry(port);
+    write!(
+        stream,
+        "POST / HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(output.status.success());
+    assert!(directory.path().join("A.cpp").is_file());
+    assert_eq!(fs::read(directory.path().join("A.in1")).unwrap(), b"7\n");
+    assert_eq!(fs::read(directory.path().join("A.out1")).unwrap(), b"49\n");
+}

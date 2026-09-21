@@ -116,6 +116,142 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
     }
 }
 
+/// Start an interactive workspace before a source file exists. The only
+/// source-less action is contest download; after the batch arrives, the
+/// regular source session opens on the generated `A.cpp` file.
+pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
+    let (config, ui) = commands::configured(None, base_globals)?;
+    let mut editor = LineEditor::new(
+        config.state_dir.join("history.txt"),
+        config.mouse,
+        ui.color_enabled(),
+    );
+    if let Some(warning) = editor.take_warning() {
+        editor.append_output(format!("! {warning}\n").as_bytes());
+    }
+    let mouse = config.mouse;
+    let mode = base_globals.mode.unwrap_or(config.default_mode).to_string();
+    loop {
+        editor.set_context("[no source]", "contest download", &mode, mouse);
+        editor.set_case_ids(Vec::new());
+        match editor.read_line(" run-cli:[no source] › ")? {
+            EditorSignal::Success(line) => {
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+                if matches!(first_command(&line), "/exit" | "/quit") {
+                    return Ok(0);
+                }
+                if line == "/help" {
+                    editor.append_output(
+                        b"/contest [DIRECTORY] [--port PORT] [--wait SEC]\n  download a complete Competitive Companion contest\n/exit\n  leave run-cli\n",
+                    );
+                    continue;
+                }
+                if first_command(&line) != "/contest" {
+                    editor.append_output(
+                        "✗ Error  no source is active; use /contest to download a contest or /exit\n"
+                            .as_bytes(),
+                    );
+                    continue;
+                }
+                let tokens = match shell_words::split(&line) {
+                    Ok(tokens) => tokens,
+                    Err(error) => {
+                        editor.append_output(
+                            format!("✗ Error  cannot parse command: {error}\n").as_bytes(),
+                        );
+                        continue;
+                    }
+                };
+                let (directory, port, wait) = match parse_empty_contest(&tokens) {
+                    Ok(values) => values,
+                    Err(error) => {
+                        editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes());
+                        continue;
+                    }
+                };
+                editor.begin_command(&line);
+                terminal::begin_workspace_output(mouse)?;
+                let captured = terminal::capture_output(mouse, || {
+                    commands::download_contest(&directory, port, wait, base_globals)
+                });
+                let restore = terminal::end_workspace_output();
+                let (result, captured) = captured?;
+                restore?;
+                editor.append_captured_output(&captured.output, &captured.input);
+                match result {
+                    Ok(Some(path)) => {
+                        drop(editor);
+                        let source = resolve_source(path).map_err(AppError::usage)?;
+                        return start(source, base_globals);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes());
+                    }
+                }
+                editor.set_mouse(mouse);
+                editor.set_color(ui.color_enabled());
+            }
+            EditorSignal::Action(action) => match action {
+                EditorAction::SelectText => unreachable!("handled by the editor"),
+                _ => editor.append_output(
+                    "✗ Error  no source is active; use /contest to download a contest\n".as_bytes(),
+                ),
+            },
+            EditorSignal::CtrlC => editor.append_output(b"^C\n"),
+            EditorSignal::CtrlD => return Ok(0),
+        }
+    }
+}
+
+fn parse_empty_contest(tokens: &[String]) -> AppResult<(PathBuf, u16, f64)> {
+    if tokens.first().map(String::as_str) != Some("/contest") {
+        return Err(AppError::usage(
+            "usage: /contest [DIRECTORY] [--port PORT] [--wait SEC]",
+        ));
+    }
+    let mut directory = None;
+    let mut port = 10043_u16;
+    let mut wait = 120.0_f64;
+    let mut index = 1;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "--port" => {
+                index += 1;
+                let value = tokens.get(index).ok_or_else(|| {
+                    AppError::usage("usage: /contest [DIRECTORY] [--port PORT] [--wait SEC]")
+                })?;
+                port = value
+                    .parse()
+                    .map_err(|_| AppError::usage("--port must be an integer"))?;
+            }
+            "--wait" => {
+                index += 1;
+                let value = tokens.get(index).ok_or_else(|| {
+                    AppError::usage("usage: /contest [DIRECTORY] [--port PORT] [--wait SEC]")
+                })?;
+                wait = value
+                    .parse()
+                    .map_err(|_| AppError::usage("--wait must be a positive number"))?;
+            }
+            value if value.starts_with('-') => {
+                return Err(AppError::usage(format!("unknown option '{value}'")));
+            }
+            value if directory.is_none() => directory = Some(PathBuf::from(value)),
+            _ => {
+                return Err(AppError::usage(
+                    "only one contest directory may be provided",
+                ))
+            }
+        }
+        index += 1;
+    }
+    Ok((directory.unwrap_or_else(|| PathBuf::from(".")), port, wait))
+}
+
 struct Session {
     source: SourceSpec,
     mode: BuildMode,
@@ -353,13 +489,29 @@ impl Session {
                 self.execute(args)?;
                 Ok(SessionAction::Continue)
             }
+            "/contest" => {
+                let mut args = vec![
+                    OsString::from("run-cli"),
+                    OsString::from("companion"),
+                    self.source.requested.as_os_str().to_owned(),
+                    OsString::from("--contest"),
+                ];
+                args.extend(tokens.iter().skip(1).map(OsString::from));
+                self.execute(args)?;
+                Ok(SessionAction::Continue)
+            }
             "/companion" => {
                 let mut args = vec![
                     OsString::from("run-cli"),
                     OsString::from("companion"),
                     self.source.requested.as_os_str().to_owned(),
                 ];
-                args.extend(tokens.iter().skip(1).map(OsString::from));
+                if tokens.get(1).map(String::as_str) == Some("contest") {
+                    args.push(OsString::from("--contest"));
+                    args.extend(tokens.iter().skip(2).map(OsString::from));
+                } else {
+                    args.extend(tokens.iter().skip(1).map(OsString::from));
+                }
                 self.execute(args)?;
                 Ok(SessionAction::Continue)
             }
@@ -504,7 +656,8 @@ fn print_help(topic: Option<&str>) {
             "case" => "/case list|show ID|copy ID|paste [ID] [--run]|add|edit ID|delete ID|clear",
             "compare" | "diff" => "/compare ID EXPECTED",
             "stress" => "/stress BRUTE GENERATOR [--runs N] [--timeout SEC]",
-            "companion" => "/companion [--port PORT] [--wait SEC]\nWait for one problem from the Competitive Companion extension and append its samples.",
+            "contest" => "/contest [--port PORT] [--wait SEC]\nDownload a complete contest from Competitive Companion.",
+            "companion" => "/companion [contest] [--port PORT] [--wait SEC]\nWait for one problem, or collect a complete contest batch, from Competitive Companion.",
             "open" | "source" => "/open [PATH]\nWith no path, open the fuzzy source picker.",
             "debug" | "mode" => "/debug [on|off|toggle]\nWith no value, toggle debug mode.",
             "mouse" => "/mouse [on|off|toggle]\nWith no value, toggle mouse controls.",
@@ -535,8 +688,10 @@ CASES
   /case add|edit ID|delete ID|clear
   /compare ID EXPECTED
   /stress BRUTE GENERATOR [--runs N] [--timeout SEC]
-  /companion [--port PORT] [--wait SEC]
-                          import samples from Competitive Companion
+  /contest [--port PORT] [--wait SEC]
+                          download a complete contest
+  /companion [contest] [--port PORT] [--wait SEC]
+                          import one problem or a complete contest batch
 
 SESSION
   /open [PATH]          switch the active source
@@ -553,4 +708,33 @@ KEYS
   Tab suggestions · ↑↓ navigate · Enter select · Esc close · Ctrl-D exit
 "
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_source_less_contest_defaults() {
+        let (directory, port, wait) = parse_empty_contest(&["/contest".into()]).unwrap();
+        assert_eq!(directory, PathBuf::from("."));
+        assert_eq!(port, 10043);
+        assert_eq!(wait, 120.0);
+    }
+
+    #[test]
+    fn parses_source_less_contest_directory_and_options() {
+        let tokens = vec![
+            "/contest".into(),
+            "round".into(),
+            "--port".into(),
+            "4244".into(),
+            "--wait".into(),
+            "30".into(),
+        ];
+        let (directory, port, wait) = parse_empty_contest(&tokens).unwrap();
+        assert_eq!(directory, PathBuf::from("round"));
+        assert_eq!(port, 4244);
+        assert_eq!(wait, 30.0);
+    }
 }

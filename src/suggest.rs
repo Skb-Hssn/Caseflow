@@ -9,6 +9,7 @@ const REPL_COMMANDS: &[(&str, &str)] = &[
     ("/case", "manage saved cases"),
     ("/compare", "compare a saved case"),
     ("/stress", "run differential stress tests"),
+    ("/contest", "download a complete contest"),
     ("/companion", "import samples from Competitive Companion"),
     ("/open", "switch the active source"),
     ("/debug", "toggle debug builds"),
@@ -42,6 +43,7 @@ const HELP_TOPICS: &[(&str, &str)] = &[
     ("case", "manage saved cases"),
     ("compare", "compare a saved case"),
     ("stress", "run differential stress tests"),
+    ("contest", "download a complete contest"),
     ("companion", "import samples from Competitive Companion"),
     ("open", "switch the active source"),
     ("debug", "toggle debug builds"),
@@ -65,6 +67,7 @@ pub struct Completion {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PathKind {
+    Directory,
     Source,
     Input,
     Output,
@@ -124,6 +127,7 @@ fn complete(line: &str, cursor: usize, repl: bool) -> Vec<Completion> {
                         ("--color", "set color output policy"),
                         ("--mouse", "enable interactive mouse controls"),
                         ("--debug", "use debug build settings"),
+                        ("--no-source", "start without selecting a source"),
                     ],
                     raw,
                     start,
@@ -147,7 +151,7 @@ fn cli_command_position(tokens: &[String], trailing_space: bool) -> bool {
     let mut index = 0;
     while index < current {
         match tokens[index].as_str() {
-            "--mouse" | "--debug" => index += 1,
+            "--mouse" | "--debug" | "--no-source" => index += 1,
             "--color" => index += 2,
             value if value.starts_with("--color=") => index += 1,
             _ => return false,
@@ -220,6 +224,14 @@ fn expected_path_kind(tokens: &[String], trailing_space: bool, repl: bool) -> Op
     let previous = previous_token(tokens, current, trailing_space);
 
     match command {
+        "/contest"
+            if relative == 1
+                && tokens
+                    .get(current)
+                    .is_none_or(|token| !token.starts_with('-')) =>
+        {
+            Some(PathKind::Directory)
+        }
         "/open" | "/source" if relative == 1 => Some(PathKind::Source),
         "/compare" | "/diff" if relative == 2 => Some(PathKind::Expected),
         "/stress"
@@ -317,6 +329,7 @@ fn expected_literals(
         "/run" => repl_run_options_only(),
         "/case" => repl_case_options(tokens, command_index),
         "/stress" => stress_options(),
+        "/contest" => companion_options(),
         "/companion" => companion_options(),
         "/help" => HELP_TOPICS.to_vec(),
         "run" | "exec"
@@ -350,6 +363,8 @@ fn expected_literals(
 
 fn companion_options() -> Vec<(&'static str, &'static str)> {
     vec![
+        ("contest", "collect every problem in one contest batch"),
+        ("--contest", "collect every problem in one contest batch"),
         ("--port", "set the local receiver port"),
         ("--wait", "set how long to wait for a problem"),
     ]
@@ -478,6 +493,9 @@ fn complete_paths(raw: &str, start: usize, end: usize, kind: PathKind) -> Vec<Co
             }
             let path = entry.path();
             let is_dir = entry.file_type().ok()?.is_dir();
+            if kind == PathKind::Directory && !is_dir {
+                return None;
+            }
             if !is_dir && kind == PathKind::Source && !is_supported_source(&path) {
                 return None;
             }

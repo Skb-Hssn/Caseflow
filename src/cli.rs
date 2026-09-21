@@ -21,6 +21,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub debug: bool,
 
+    /// Start an interactive session without selecting an existing source.
+    #[arg(long, conflicts_with = "source")]
+    pub no_source: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 
@@ -246,15 +250,21 @@ pub struct StressArgs {
 #[derive(Debug, Args)]
 pub struct CompanionArgs {
     #[arg(value_hint = ValueHint::FilePath)]
-    pub source: PathBuf,
+    pub source: Option<PathBuf>,
 
     /// Local port configured in Competitive Companion.
     #[arg(long, default_value_t = 10043)]
     pub port: u16,
 
-    /// Seconds to wait for one problem payload.
+    /// Seconds to wait for the next problem payload (or the first contest
+    /// payload in contest mode).
     #[arg(long, value_name = "SECONDS", default_value_t = 120.0)]
     pub wait: f64,
+
+    /// Collect every problem in a Competitive Companion contest batch before
+    /// importing any samples.
+    #[arg(long)]
+    pub contest: bool,
 }
 
 #[derive(Debug, Args)]
@@ -411,14 +421,30 @@ mod tests {
             "4244",
             "--wait",
             "30",
+            "--contest",
         ])
         .unwrap();
         let Some(Command::Companion(args)) = cli.command else {
             panic!("expected companion");
         };
-        assert_eq!(args.source, PathBuf::from("a.cpp"));
+        assert_eq!(args.source, Some(PathBuf::from("a.cpp")));
         assert_eq!(args.port, 4244);
         assert_eq!(args.wait, 30.0);
+        assert!(args.contest);
+    }
+
+    #[test]
+    fn parses_source_less_session_and_source_less_contest_download() {
+        let cli = Cli::try_parse_from(["run-cli", "--no-source"]).unwrap();
+        assert!(cli.no_source);
+        assert!(cli.source.is_none());
+
+        let cli = Cli::try_parse_from(["run-cli", "companion", "--contest"]).unwrap();
+        let Some(Command::Companion(args)) = cli.command else {
+            panic!("expected companion");
+        };
+        assert!(args.contest);
+        assert!(args.source.is_none());
     }
 
     #[test]

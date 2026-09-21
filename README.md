@@ -137,6 +137,21 @@ Given a solution named `A.cpp`, open the interactive workspace:
 run-cli A.cpp
 ```
 
+To start without an existing source and download a complete contest:
+
+```sh
+run-cli --no-source
+```
+
+At the source-less prompt, run:
+
+```text
+/contest contests/spring-round
+```
+
+The contest receiver creates `A.cpp`, `B.cpp`, and the corresponding sample
+case files in that directory, then opens the normal workspace on `A.cpp`.
+
 Then enter:
 
 ```text
@@ -258,7 +273,8 @@ signals.
 | `/case clear` | Confirm and delete every case for the active source. |
 | `/compare ID EXPECTED` | Run one case and compare it with an arbitrary expected file. |
 | `/stress BRUTE GENERATOR [OPTIONS]` | Differentially test against a trusted solution. |
-| `/companion [OPTIONS]` | Wait for one Competitive Companion problem payload. |
+| `/contest [DIRECTORY] [OPTIONS]` | Download a complete contest; source-less sessions use `DIRECTORY` for generated files. |
+| `/companion [contest] [OPTIONS]` | Import one problem or a complete Competitive Companion contest batch. |
 | `/open [PATH]` | Switch source; omit the path to open the fuzzy picker. |
 | `/debug [on\|off\|toggle]` | Inspect or change the session build mode. |
 | `/mouse [on\|off\|toggle]` | Enable or disable mouse controls. |
@@ -508,6 +524,7 @@ Global options are accepted with subcommands:
 | --- | --- |
 | `--debug` | Use debug compiler/runtime settings. |
 | `--mouse` | Enable mouse controls when an interactive UI is opened. |
+| `--no-source` | Start an interactive workspace without an existing source. |
 | `--color auto\|always\|never` | Set color output policy. |
 | `-h`, `--help` | Show help. |
 | `-V`, `--version` | Show the installed version. |
@@ -657,18 +674,44 @@ run-cli companion A.cpp
 
 While the command is waiting, click the extension button.
 
+To import an entire contest, use contest mode, open the contest page, and
+click the extension button. Competitive Companion then sends one request for
+each problem in the batch:
+
+```text
+/companion contest
+```
+
+Contest mode uses Competitive Companion's shared batch ID and problem count to
+keep collecting requests. It does not write any files until every expected
+problem has arrived; cancelling or timing out a partial batch therefore leaves
+the workspace unchanged.
+
 ### Receiver behavior
 
 - The default port is `10043`, one of Competitive Companion's built-in ports.
 - The default wait timeout is 120 seconds.
 - The listener binds only to IPv4/IPv6 loopback interfaces.
-- One invocation accepts one problem payload and then exits.
+- Normal mode accepts one problem payload and then exits.
+- Contest mode accepts every problem in one `batch` payload sequence and exits
+  after the advertised problem count is received.
 - Ctrl-C cancels the listener and returns status 130.
 - Request headers are limited to 64 KiB and the JSON body to 8 MiB.
 - Existing case IDs are never overwritten.
 - Each sample is imported atomically as a paired `.in<ID>` and `.out<ID>`.
-- Multi-problem contest batches are currently rejected so different problems
-  cannot accidentally be attached to one active source.
+- Contest mode validates that every request has the same batch ID and size,
+  rejects batches larger than 512 problems, and imports all problems
+  transactionally. If one file cannot be written, already-imported files are
+  removed.
+- Contest sample text is capped at 64 MiB across the whole batch, in addition
+  to the 8 MiB limit on each individual request body.
+- Requests are assigned in arrival order. The first problem uses the source
+  passed on the command line; later problems derive source stems as follows:
+  `A.cpp` becomes `B.cpp`, `C.cpp`, and so on, while any other stem such as
+  `main.cpp` becomes `main-2.cpp`, `main-3.cpp`, and so on. Case files are
+  created for derived stems. Existing source files are never overwritten;
+  missing contest stems are created as editable placeholders, including in
+  source-less download mode.
 
 Use a custom port or wait duration when needed:
 
@@ -679,6 +722,29 @@ Use a custom port or wait duration when needed:
 ```sh
 run-cli companion A.cpp --port 4244 --wait 300
 ```
+
+Collect a contest batch from a one-shot command:
+
+```sh
+run-cli companion A.cpp --contest --port 10043 --wait 300
+```
+
+No source file is required for a new contest directory. This uses `A.cpp` as
+the first problem stem and creates the directory when needed:
+
+```sh
+run-cli companion contests/spring-round/A.cpp --contest --port 10043
+```
+
+The same behavior with the default current directory is available as:
+
+```sh
+run-cli companion --contest
+```
+
+Competitive Companion sends the contest metadata (`batch.id` and
+`batch.size`) with each problem. If the extension is configured to a custom
+port, pass the same port to Caseflow and the extension.
 
 After import, run `/test` or click a numbered Test button. Imported expected
 outputs are judged automatically.
@@ -939,7 +1005,8 @@ run-cli run A.cpp --input A.in1 --output full.out
 - Start `/companion` before clicking the extension button.
 - Confirm the extension and Caseflow use the same port.
 - Check whether another process already owns the port.
-- Send a single problem rather than a whole-contest batch.
+- Use `/companion contest` or `run-cli companion A.cpp --contest` for a
+  whole-contest batch; normal mode intentionally accepts one problem only.
 - Increase the wait with `--wait 300` if needed.
 
 ### Mouse selection captures clicks

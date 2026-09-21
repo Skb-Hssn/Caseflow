@@ -232,7 +232,10 @@ pub fn import_samples(
     Ok(imported)
 }
 
-fn rollback_import(imported: &[ImportedSample]) {
+/// Remove files created by a previous import. This is used by multi-problem
+/// imports to make the whole operation transactional when a later problem
+/// cannot be written.
+pub fn rollback_import(imported: &[ImportedSample]) {
     for sample in imported {
         let _ = fs::remove_file(&sample.input);
         let _ = fs::remove_file(&sample.output);

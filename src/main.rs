@@ -33,7 +33,7 @@ fn main() {
     };
     let result = match cli.command {
         Some(command) => commands::execute(command, globals),
-        None => open_session(cli.source, globals),
+        None => open_session(cli.source, globals, cli.no_source),
     };
     match result {
         Ok(code) => std::process::exit(normalize_exit(code)),
@@ -48,13 +48,20 @@ fn main() {
     }
 }
 
-fn open_session(source: Option<std::path::PathBuf>, globals: GlobalOptions) -> AppResult<i32> {
+fn open_session(
+    source: Option<std::path::PathBuf>,
+    globals: GlobalOptions,
+    no_source: bool,
+) -> AppResult<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return Err(AppError::usage(
             "interactive mode requires a terminal; use 'run-cli run SOURCE' for scripts",
         ));
     }
     let _screen = terminal::ScreenGuard::enter()?;
+    if no_source {
+        return repl::start_empty(globals);
+    }
     let source = match source {
         Some(source) => source,
         None => {

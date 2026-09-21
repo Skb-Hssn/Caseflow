@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-21
+
+### Added
+
+- Added `--no-source` for starting an interactive workspace before any source
+  exists.
+- Added `/contest DIRECTORY` to receive a complete Competitive Companion
+  contest, create editable source placeholders, and open the generated
+  workspace automatically.
+- `run-cli companion --contest` now permits an omitted source and defaults to
+  `A.cpp`; missing contest source paths are created as placeholders.
+
+## [0.8.0] - 2026-09-21
+
+### Added
+
+- Added complete Competitive Companion contest parsing with `--contest` and
+  `/companion contest`.
+- Contest batches validate their shared ID and problem count, queue all
+  requests before writing, import samples into derived problem stems, and
+  roll back the entire batch if an import fails.
+- Added integration coverage for two-problem contest batches.
+
 ## [0.7.0] - 2026-09-20
 
 ### Added

@@ -68,15 +68,62 @@ fn execute_companion(args: CompanionArgs, globals: GlobalOptions) -> AppResult<i
         return Err(AppError::usage("--port must be between 1 and 65535"));
     }
     let wait = parse_duration(args.wait, "--wait").map_err(AppError::usage)?;
-    let source = resolve_source(&args.source).map_err(AppError::new)?;
-    if !source.path.is_file() {
+    let source_path = args.source.unwrap_or_else(|| PathBuf::from("A.cpp"));
+    let source = resolve_source(&source_path).map_err(AppError::new)?;
+    if !source.path.is_file() && !args.contest {
         return Err(AppError::new(format!(
             "source file '{}' does not exist",
             source.path.display()
         )));
     }
+    if args.contest {
+        if let Some(parent) = source
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).map_err(|error| {
+                AppError::new(format!(
+                    "cannot create contest directory '{}': {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+    }
     let (config, ui) = configured(Some(&source.path), globals)?;
-    companion::receive(&source, &config, &ui, args.port, wait)
+    companion::receive(&source, &config, &ui, args.port, wait, args.contest)
+}
+
+/// Receive a complete contest into a directory without requiring a pre-existing
+/// source file. The receiver creates `A.cpp`, `B.cpp`, and so on as placeholders
+/// alongside the imported case files.
+pub fn download_contest(
+    directory: &Path,
+    port: u16,
+    wait_value: f64,
+    globals: GlobalOptions,
+) -> AppResult<Option<PathBuf>> {
+    if port == 0 {
+        return Err(AppError::usage("--port must be between 1 and 65535"));
+    }
+    let wait = parse_duration(wait_value, "--wait").map_err(AppError::usage)?;
+    fs::create_dir_all(directory).map_err(|error| {
+        AppError::new(format!(
+            "cannot create contest directory '{}': {error}",
+            directory.display()
+        ))
+    })?;
+    let source_path = directory.join("A.cpp");
+    let source = resolve_source(&source_path).map_err(AppError::new)?;
+    let (config, ui) = configured(Some(&source.path), globals)?;
+    match companion::receive(&source, &config, &ui, port, wait, true)? {
+        0 => Ok(Some(source.path)),
+        130 => Ok(None),
+        code => Err(AppError::with_code(
+            format!("contest download ended with status {code}"),
+            code,
+        )),
+    }
 }
 
 fn execute_complete(args: CompleteArgs) -> AppResult<i32> {
