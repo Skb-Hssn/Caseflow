@@ -130,7 +130,7 @@ impl Default for Config {
             stress_limit: 1000,
             stress_timeout: Duration::from_secs(2),
             color: ColorPolicy::Auto,
-            mouse: false,
+            mouse: true,
             cache_dir: xdg_dir("XDG_CACHE_HOME", ".cache").join("run-cli"),
             state_dir: xdg_dir("XDG_STATE_HOME", ".local/state").join("run-cli"),
         }
@@ -304,5 +304,6 @@ mod tests {
             .flags
             .cpp_debug
             .contains(&"-fsanitize=address,undefined".to_string()));
+        assert!(config.mouse, "mouse controls should be enabled by default");
     }
 }

@@ -28,7 +28,13 @@ fn main() {
     let cli = Cli::parse();
     let globals = GlobalOptions {
         color: cli.color,
-        mouse: cli.mouse,
+        mouse: if cli.no_mouse {
+            Some(false)
+        } else if cli.mouse {
+            Some(true)
+        } else {
+            None
+        },
         mode: cli.debug.then_some(model::BuildMode::Debug),
     };
     let result = match cli.command {

@@ -13,9 +13,13 @@ pub struct Cli {
     #[arg(long, global = true, value_enum)]
     pub color: Option<ColorArg>,
 
-    /// Enable mouse controls in interactive pickers and dialogs.
-    #[arg(long, global = true)]
+    /// Explicitly enable mouse controls in interactive pickers and dialogs.
+    #[arg(long, global = true, conflicts_with = "no_mouse")]
     pub mouse: bool,
+
+    /// Disable mouse controls, which are enabled by default.
+    #[arg(long, global = true, conflicts_with = "mouse")]
+    pub no_mouse: bool,
 
     /// Use debug compiler/runtime settings.
     #[arg(long, global = true)]
@@ -292,6 +296,21 @@ mod tests {
         let cli = Cli::try_parse_from(["run-cli", "a.cpp"]).unwrap();
         assert_eq!(cli.source, Some(PathBuf::from("a.cpp")));
         assert!(cli.command.is_none());
+        assert!(!cli.mouse);
+        assert!(!cli.no_mouse);
+    }
+
+    #[test]
+    fn parses_explicit_mouse_overrides() {
+        let enabled = Cli::try_parse_from(["run-cli", "--mouse", "a.cpp"]).unwrap();
+        assert!(enabled.mouse);
+        assert!(!enabled.no_mouse);
+
+        let disabled = Cli::try_parse_from(["run-cli", "--no-mouse", "a.cpp"]).unwrap();
+        assert!(!disabled.mouse);
+        assert!(disabled.no_mouse);
+
+        assert!(Cli::try_parse_from(["run-cli", "--mouse", "--no-mouse", "a.cpp"]).is_err());
     }
 
     #[test]

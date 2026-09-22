@@ -125,7 +125,8 @@ fn complete(line: &str, cursor: usize, repl: bool) -> Vec<Completion> {
                 return literal_completions(
                     &[
                         ("--color", "set color output policy"),
-                        ("--mouse", "enable interactive mouse controls"),
+                        ("--mouse", "explicitly enable mouse controls"),
+                        ("--no-mouse", "disable interactive mouse controls"),
                         ("--debug", "use debug build settings"),
                         ("--no-source", "start without selecting a source"),
                     ],
@@ -151,7 +152,7 @@ fn cli_command_position(tokens: &[String], trailing_space: bool) -> bool {
     let mut index = 0;
     while index < current {
         match tokens[index].as_str() {
-            "--mouse" | "--debug" | "--no-source" => index += 1,
+            "--mouse" | "--no-mouse" | "--debug" | "--no-source" => index += 1,
             "--color" => index += 2,
             value if value.starts_with("--color=") => index += 1,
             _ => return false,

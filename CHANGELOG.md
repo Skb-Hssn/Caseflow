@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-22
+
+### Added
+
+- Added `--no-mouse` as an explicit override for terminals or workflows where
+  mouse reporting is not wanted.
+- Added Session status and Check tools to the More menu.
+
+### Changed
+
+- Enabled mouse controls by default for interactive sessions while retaining
+  `--mouse` as an explicit compatibility override.
+- Reordered the More menu around common, safe actions and moved destructive
+  and exit actions toward the bottom.
+
 ## [0.10.0] - 2026-09-22
 
 ### Added

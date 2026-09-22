@@ -372,13 +372,18 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
     const ITEMS: &[(&str, &str)] = &[
         ("Open source", "switch source or open the fuzzy picker"),
         ("Edit case", "edit a saved input in the external editor"),
-        ("Delete case", "delete a saved input after confirmation"),
+        ("Clear output", "clear retained workspace output"),
+        (
+            "Session status",
+            "show source, mode, cases, mouse, and cache",
+        ),
         (
             "Import problem",
             "receive one Competitive Companion problem",
         ),
         ("Download contest", "receive a complete contest batch"),
-        ("Clear output", "clear retained workspace output"),
+        ("Delete case", "delete a saved input after confirmation"),
+        ("Check tools", "inspect toolchains and clipboard support"),
         ("Help", "show commands and keyboard controls"),
         ("Exit", "leave Caseflow and restore the terminal"),
     ];
@@ -394,12 +399,14 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
     let action = match selected {
         0 => MoreAction::Command("/open".to_string()),
         1 => return select_case_action(session, "Edit saved case", "/case edit"),
-        2 => return select_case_action(session, "Delete saved case", "/case delete"),
-        3 => MoreAction::Command("/companion".to_string()),
-        4 => MoreAction::Command("/contest".to_string()),
-        5 => MoreAction::ClearOutput,
-        6 => MoreAction::Command("/help".to_string()),
-        7 => MoreAction::Command("/exit".to_string()),
+        2 => MoreAction::ClearOutput,
+        3 => MoreAction::Command("/status".to_string()),
+        4 => MoreAction::Command("/companion".to_string()),
+        5 => MoreAction::Command("/contest".to_string()),
+        6 => return select_case_action(session, "Delete saved case", "/case delete"),
+        7 => MoreAction::Command("/doctor".to_string()),
+        8 => MoreAction::Command("/help".to_string()),
+        9 => MoreAction::Command("/exit".to_string()),
         _ => return Ok(None),
     };
     Ok(Some(action))
@@ -525,7 +532,6 @@ impl Session {
                     let (config, ui) = commands::configured(Some(&source.path), self.base_globals)?;
                     self.source = source;
                     self.mode = self.base_globals.mode.unwrap_or(config.default_mode);
-                    self.mouse = self.mouse || config.mouse;
                     self.config = config;
                     self.ui = ui;
                     self.ui
@@ -747,7 +753,7 @@ impl Session {
             .ok_or_else(|| AppError::usage("missing command"))?;
         let globals = GlobalOptions {
             color: self.base_globals.color,
-            mouse: self.mouse,
+            mouse: Some(self.mouse),
             mode: Some(if cli.debug {
                 BuildMode::Debug
             } else {

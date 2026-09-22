@@ -25,7 +25,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GlobalOptions {
     pub color: Option<ColorArg>,
-    pub mouse: bool,
+    pub mouse: Option<bool>,
     pub mode: Option<BuildMode>,
 }
 
@@ -38,8 +38,8 @@ pub fn configured(source: Option<&Path>, globals: GlobalOptions) -> AppResult<(C
             ColorArg::Never => ColorPolicy::Never,
         };
     }
-    if globals.mouse {
-        config.mouse = true;
+    if let Some(mouse) = globals.mouse {
+        config.mouse = mouse;
     }
     let ui = Ui::new(config.color);
     Ok((config, ui))

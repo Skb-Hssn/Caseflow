@@ -20,5 +20,4 @@ stress_timeout = 2.0
 
 [ui]
 color = "auto"
-mouse = false
-
+mouse = true

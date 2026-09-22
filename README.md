@@ -248,8 +248,8 @@ run-cli
 # Open a specific source
 run-cli A.cpp
 
-# Open with mouse controls enabled
-run-cli --mouse A.cpp
+# Disable mouse controls for this session
+run-cli --no-mouse A.cpp
 
 # Start in debug mode
 run-cli --debug A.cpp
@@ -345,20 +345,25 @@ latest 1,000 commands.
 
 ### Mouse controls and text selection
 
-Mouse support is optional and disabled by default. Enable it with any of:
+Mouse controls are enabled by default in interactive sessions. Disable them for
+one session with:
 
 ```sh
-run-cli --mouse A.cpp
+run-cli --no-mouse A.cpp
 ```
 
 ```text
-/mouse on
+/mouse off
 ```
 
 ```toml
 [ui]
-mouse = true
+mouse = false
 ```
+
+`--mouse` remains available as an explicit override, which is useful when a
+user or project configuration has disabled mouse controls. Inside a running
+session, `/mouse on`, `/mouse off`, and `/mouse toggle` take effect immediately.
 
 The fixed toolbar exposes the following compact controls:
 
@@ -375,11 +380,13 @@ Run controls use the primary accent, saved tests use a softer accent, active
 debug mode is green, and inactive state controls remain neutral. The toolbar
 and prompt stay fixed on adjacent rows while only the output viewport scrolls.
 
-`[Again]` remains neutral until a repeatable command exists. The More menu
-provides source switching, case editing and deletion, single-problem import,
-contest download, output clearing, help, and exit. Choose with the mouse or
-with Up/Down and Enter; Esc closes the menu. Edit and Delete open a second
-saved-case picker, and deletion still requires confirmation.
+`[Again]` remains neutral until a repeatable command exists. The More menu is
+ordered around common actions: source switching and case editing; output and
+session utilities; Companion imports; deletion; diagnostics, help, and exit.
+It also exposes Session status and Check tools without adding permanent toolbar
+buttons. Choose with the mouse or with Up/Down and Enter; Esc closes the menu.
+Edit and Delete open a second saved-case picker, and deletion still requires
+confirmation.
 
 The toolbar becomes more compact on narrow terminals: `[Again]`, `[+Case]`,
 and `[More]` become `[R]`, `[+]`, and `[…]`, then single-character controls at
@@ -555,7 +562,8 @@ These global execution options are accepted before or after subcommands:
 | Option                        | Meaning                                                 |
 | ----------------------------- | ------------------------------------------------------- |
 | `--debug`                   | Use debug compiler/runtime settings.                    |
-| `--mouse`                   | Enable mouse controls when an interactive UI is opened. |
+| `--mouse`                   | Explicitly enable mouse controls, overriding configuration. |
+| `--no-mouse`                | Disable mouse controls when an interactive UI is opened. |
 | `--color auto\|always\|never` | Set color output policy.                                |
 
 `--no-source` is a top-level session option rather than a subcommand option:
@@ -705,7 +713,7 @@ the general receiver and defaults to one problem unless `contest` is supplied.
 Open the solution:
 
 ```sh
-run-cli --mouse A.cpp
+run-cli A.cpp
 ```
 
 Start the receiver:
@@ -904,7 +912,7 @@ stress_timeout = 2.0
 
 [ui]
 color = "auto"          # "auto", "always", or "never"
-mouse = false
+mouse = true             # enabled by default; set false to opt out
 ```
 
 Flag arrays replace the corresponding built-in list; they are not appended.

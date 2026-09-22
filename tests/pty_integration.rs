@@ -177,8 +177,8 @@ fn repl_command(directory: &TempDir, source: &Path, mouse: bool) -> CommandBuild
     command.cwd(directory.path());
     command.arg("--color");
     command.arg("never");
-    if mouse {
-        command.arg("--mouse");
+    if !mouse {
+        command.arg("--no-mouse");
     }
     command.arg(source);
     command.env("XDG_CACHE_HOME", directory.path().join("cache"));
@@ -563,8 +563,8 @@ fn mouse_toolbar_more_menu_runs_the_selected_action() {
     session.send(b"\x1b[<0;75;23M");
     session.wait_for("More actions");
     session.wait_for("Download contest");
-    // Help is the seventh menu item and appears on terminal row 11.
-    session.send(b"\x1b[<0;5;11M");
+    // Help is the ninth menu item and appears on terminal row 13.
+    session.send(b"\x1b[<0;5;13M");
     session.wait_for("KEYS");
     session.wait_for("run-cli:main.py");
     session.send(b"/quit\r");
@@ -597,7 +597,7 @@ fn more_menu_case_picker_edits_and_deletes_a_saved_case() {
     // More → Delete case → Case #3; Enter confirms the existing safety dialog.
     session.send(b"\x1b[<0;79;23M");
     session.wait_for("More actions");
-    session.send(b"\x1b[<0;5;7M");
+    session.send(b"\x1b[<0;5;11M");
     session.wait_for("Delete saved case");
     session.send(b"\x1b[<0;5;5M");
     session.wait_for("Delete saved input #3?");
