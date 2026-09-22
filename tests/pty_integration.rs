@@ -519,6 +519,97 @@ fn persistent_mouse_toolbar_runs_the_active_source() {
 }
 
 #[test]
+fn mouse_toolbar_again_repeats_the_latest_run() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('toolbar-again')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[Again]");
+    session.send(b"\x1b[<0;10;23M");
+    session.wait_for_count("toolbar-again", 1);
+    session.wait_for("Success (exit 0)");
+    session.send(b"\x1b[<0;22;23M");
+    session.wait_for_count("toolbar-again", 2);
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn mouse_toolbar_add_case_opens_the_external_editor() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip())\n");
+    let editor = directory.path().join("toolbar-editor.sh");
+    fs::write(&editor, "#!/bin/sh\nprintf 'toolbar case\\n' > \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = repl_command(&directory, &source, true);
+    command.env("VISUAL", &editor);
+    let session = PtySession::spawn(command);
+    session.wait_for("[+Case]");
+    session.send(b"\x1b[<0;37;23M");
+    session.wait_for("Added input #1");
+    assert_eq!(
+        fs::read_to_string(directory.path().join("main.in1")).unwrap(),
+        "toolbar case\n"
+    );
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn mouse_toolbar_more_menu_runs_the_selected_action() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[More]");
+    session.send(b"\x1b[<0;75;23M");
+    session.wait_for("More actions");
+    session.wait_for("Download contest");
+    // Help is the seventh menu item and appears on terminal row 11.
+    session.send(b"\x1b[<0;5;11M");
+    session.wait_for("KEYS");
+    session.wait_for("run-cli:main.py");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn more_menu_case_picker_edits_and_deletes_a_saved_case() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip())\n");
+    let saved = directory.path().join("main.in3");
+    fs::write(&saved, "before\n").unwrap();
+    let editor = directory.path().join("case-picker-editor.sh");
+    fs::write(&editor, "#!/bin/sh\nprintf 'after\\n' > \"$1\"\n").unwrap();
+    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut command = repl_command(&directory, &source, true);
+    command.env("VISUAL", &editor);
+    let session = PtySession::spawn(command);
+    session.wait_for("[More]");
+
+    // More → Edit case → Case #3.
+    session.send(b"\x1b[<0;79;23M");
+    session.wait_for("More actions");
+    session.send(b"\x1b[<0;5;6M");
+    session.wait_for("Edit saved case");
+    session.send(b"\x1b[<0;5;5M");
+    session.wait_for("Updated input #3");
+    assert_eq!(fs::read_to_string(&saved).unwrap(), "after\n");
+
+    // More → Delete case → Case #3; Enter confirms the existing safety dialog.
+    session.send(b"\x1b[<0;79;23M");
+    session.wait_for("More actions");
+    session.send(b"\x1b[<0;5;7M");
+    session.wait_for("Delete saved case");
+    session.send(b"\x1b[<0;5;5M");
+    session.wait_for("Delete saved input #3?");
+    session.send(b"\r");
+    session.wait_for("Deleted");
+    assert!(!saved.exists());
+
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn mouse_toolbar_is_not_redrawn_while_typing() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
@@ -553,7 +644,7 @@ fn debug_toolbar_button_toggles_build_mode() {
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[Off]");
     assert!(!session.text().contains("[ Build ]"));
-    session.send(b"\x1b[<0;44;23M");
+    session.send(b"\x1b[<0;58;23M");
     session.wait_for("Build mode: debug");
     session.wait_for("[On]");
     session.send(b"/quit\r");
@@ -607,8 +698,8 @@ fn mouse_toolbar_runs_a_specific_numbered_case() {
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[7]");
     session.wait_for("[All]");
-    // The first numbered case begins near column 28 on the compact full bar.
-    session.send(b"\x1b[<0;29;23M");
+    // The first numbered case follows the Run and +Case controls.
+    session.send(b"\x1b[<0;44;23M");
     session.wait_for("File ·");
     session.wait_for("Input");
     session.wait_for("Output");
@@ -628,7 +719,7 @@ fn select_button_releases_mouse_for_native_copying() {
     session.send(b"/help\r");
     session.wait_for("KEYS");
     session.wait_for("run-cli:main.py");
-    session.send(b"\x1b[<0;53;23M");
+    session.send(b"\x1b[<0;66;23M");
     session.wait_for("wheel/↑↓ scroll");
     assert!(session.text().contains("\x1b[?1007h"));
     // Alternate-scroll mode translates the wheel to cursor keys while native

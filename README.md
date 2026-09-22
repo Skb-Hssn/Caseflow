@@ -364,17 +364,29 @@ The fixed toolbar exposes the following compact controls:
 
 - **Run `[Int]`** starts an interactive run.
 - **Run `[Clip]`** appends clipboard input as a case and runs it.
+- **Run `[Again]`** repeats the latest run or test with its original options.
+- **Test `[+Case]`** opens the configured editor to create the next saved case.
 - **Test `[1]`, `[2]`, ... `[All]`** runs one saved case or every case.
 - **Debug `[Off]` / `[On]`** toggles the persistent build mode.
 - **`[Select]`** releases the mouse for native terminal selection and copying.
+- **`[More]`** opens the overflow action menu.
 
 Run controls use the primary accent, saved tests use a softer accent, active
 debug mode is green, and inactive state controls remain neutral. The toolbar
 and prompt stay fixed on adjacent rows while only the output viewport scrolls.
 
-The toolbar becomes more compact on narrow terminals. Mouse reporting is
-enabled only while Caseflow owns the workspace and is disabled while a child
-program or external editor owns the terminal.
+`[Again]` remains neutral until a repeatable command exists. The More menu
+provides source switching, case editing and deletion, single-problem import,
+contest download, output clearing, help, and exit. Choose with the mouse or
+with Up/Down and Enter; Esc closes the menu. Edit and Delete open a second
+saved-case picker, and deletion still requires confirmation.
+
+The toolbar becomes more compact on narrow terminals: `[Again]`, `[+Case]`,
+and `[More]` become `[R]`, `[+]`, and `[…]`, then single-character controls at
+the narrowest supported width. Numbered tests that do not fit are represented
+by an ellipsis while `[All]` remains available. Mouse reporting is enabled only
+while Caseflow owns the workspace and is disabled while a child program or
+external editor owns the terminal.
 
 Choose **Select**, drag over visible text, and copy with your terminal's normal
 shortcut, commonly Ctrl-Shift-C. The wheel, arrow keys, Page Up/Down, Home, and

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-22
+
+### Added
+
+- Added persistent toolbar actions for repeating the latest run or test and
+  creating a saved case in the configured external editor.
+- Added a responsive More menu with source switching, case editing and
+  deletion, Competitive Companion problem and contest import, output clearing,
+  help, and exit actions.
+- Added mouse and keyboard navigation for toolbar overflow menus, including a
+  saved-case picker for edit and delete actions.
+
+### Changed
+
+- Improved toolbar responsiveness by reserving room for utility controls,
+  showing an omission marker when numbered tests do not fit, and using compact
+  `R`, `+`, and More labels on narrow terminals.
+
 ## [0.9.2] - 2026-09-21
 
 ### Changed

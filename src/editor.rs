@@ -28,8 +28,11 @@ pub enum EditorSignal {
 pub enum EditorAction {
     RunInteractive,
     RunClipboard,
+    RepeatLast,
+    AddCase,
     ToggleDebug,
     SelectText,
+    More,
     TestCase(u64),
     TestAll,
 }
@@ -40,6 +43,7 @@ pub struct LineEditor {
     mouse: bool,
     color: bool,
     case_ids: Vec<u64>,
+    repeat_available: bool,
     context: EditorContext,
     output_lines: Vec<String>,
     scroll_offset: usize,
@@ -114,6 +118,7 @@ struct RenderOptions<'a> {
     selection_mode: bool,
     color: bool,
     case_ids: &'a [u64],
+    repeat_available: bool,
     context: &'a EditorContext,
     output_lines: &'a [String],
     scroll_offset: usize,
@@ -121,6 +126,7 @@ struct RenderOptions<'a> {
 
 struct ToolbarOptions<'a> {
     case_ids: &'a [u64],
+    repeat_available: bool,
     debug: bool,
     selection_mode: bool,
 }
@@ -152,6 +158,7 @@ impl LineEditor {
             mouse,
             color,
             case_ids: Vec::new(),
+            repeat_available: false,
             context: EditorContext::default(),
             output_lines: Vec::new(),
             scroll_offset: 0,
@@ -173,6 +180,10 @@ impl LineEditor {
 
     pub fn set_case_ids(&mut self, case_ids: Vec<u64>) {
         self.case_ids = case_ids;
+    }
+
+    pub fn set_repeat_available(&mut self, available: bool) {
+        self.repeat_available = available;
     }
 
     pub fn set_context(
@@ -272,6 +283,7 @@ impl LineEditor {
                         selection_mode,
                         color: self.color,
                         case_ids: &self.case_ids,
+                        repeat_available: self.repeat_available,
                         context: &self.context,
                         output_lines: &self.output_lines,
                         scroll_offset: self.scroll_offset,
@@ -676,7 +688,7 @@ fn render_workspace(
     let height = height.max(1);
     // Keep the toolbar and prompt in a compact fixed footer so the output
     // viewport has as much room as possible while controls stay stable.
-    let show_toolbar = options.show_toolbar && height >= 4;
+    let show_toolbar = options.show_toolbar && height >= 4 && width >= 8;
     let footer_rows = if show_toolbar { 2 } else { 1 };
     let header_rows = terminal_state::WORKSPACE_HEADER_ROWS
         .min(height.saturating_sub(footer_rows).saturating_sub(1));
@@ -760,6 +772,7 @@ fn render_workspace(
                 options.color,
                 ToolbarOptions {
                     case_ids: options.case_ids,
+                    repeat_available: options.repeat_available,
                     debug: options.context.mode == "debug",
                     selection_mode: options.selection_mode,
                 },
@@ -1183,10 +1196,10 @@ fn draw_toolbar(
     layout.toolbar_row = row;
     queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
     layout.toolbar_regions.clear();
-    let compact = width < 80;
+    let compact = width < 83;
     let mut column = 0_u16;
 
-    if width < 18 {
+    if width < 33 {
         draw_toolbar_action(
             output,
             "I",
@@ -1205,10 +1218,32 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_action(
+            output,
+            "R",
+            EditorAction::RepeatLast,
+            color,
+            if options.repeat_available {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_action(
+            output,
+            "+",
+            EditorAction::AddCase,
+            color,
+            theme::PRIMARY_SOFT,
+            &mut column,
+            layout,
+        )?;
         draw_toolbar_text(output, "T", color, &mut column)?;
         draw_test_actions(
             output,
-            width.saturating_sub(2),
+            width.saturating_sub(3),
             options.case_ids,
             ToolbarDensity::Tiny,
             color,
@@ -1242,6 +1277,15 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_action(
+            output,
+            "M",
+            EditorAction::More,
+            color,
+            theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
     } else if compact {
         draw_toolbar_text(output, " R", color, &mut column)?;
         draw_toolbar_action(
@@ -1262,10 +1306,32 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_action(
+            output,
+            "[R]",
+            EditorAction::RepeatLast,
+            color,
+            if options.repeat_available {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
+            &mut column,
+            layout,
+        )?;
         draw_toolbar_text(output, " T", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[+]",
+            EditorAction::AddCase,
+            color,
+            theme::PRIMARY_SOFT,
+            &mut column,
+            layout,
+        )?;
         draw_test_actions(
             output,
-            width.saturating_sub(11),
+            width.saturating_sub(14),
             options.case_ids,
             ToolbarDensity::Compact,
             color,
@@ -1301,6 +1367,15 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_action(
+            output,
+            "[…]",
+            EditorAction::More,
+            color,
+            theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
     } else {
         draw_toolbar_text(output, " Run  ", color, &mut column)?;
         draw_toolbar_action(
@@ -1322,10 +1397,34 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[Again]",
+            EditorAction::RepeatLast,
+            color,
+            if options.repeat_available {
+                theme::PRIMARY
+            } else {
+                theme::SURFACE
+            },
+            &mut column,
+            layout,
+        )?;
         draw_toolbar_text(output, "   Test  ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[+Case]",
+            EditorAction::AddCase,
+            color,
+            theme::PRIMARY_SOFT,
+            &mut column,
+            layout,
+        )?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
         draw_test_actions(
             output,
-            width.saturating_sub(25),
+            width.saturating_sub(32),
             options.case_ids,
             ToolbarDensity::Full,
             color,
@@ -1361,6 +1460,16 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
+        draw_toolbar_text(output, " ", color, &mut column)?;
+        draw_toolbar_action(
+            output,
+            "[More]",
+            EditorAction::More,
+            color,
+            theme::SURFACE,
+            &mut column,
+            layout,
+        )?;
     }
     Ok(())
 }
@@ -1383,14 +1492,20 @@ fn draw_test_actions(
     };
     let all_width = UnicodeWidthStr::width(all_label) as u16;
     let mut omitted = false;
-    for id in case_ids {
+    for (index, id) in case_ids.iter().enumerate() {
         let label = match density {
             ToolbarDensity::Tiny => id.to_string(),
             ToolbarDensity::Compact => format!("[{id}]"),
             ToolbarDensity::Full => format!("[{id}]"),
         };
         let needed = UnicodeWidthStr::width(label.as_str()) as u16 + 1;
-        if column.saturating_add(needed).saturating_add(all_width) > width {
+        let remaining_indicator = if index + 1 < case_ids.len() { 2 } else { 0 };
+        if column
+            .saturating_add(needed)
+            .saturating_add(remaining_indicator)
+            .saturating_add(all_width)
+            > width
+        {
             omitted = true;
             break;
         }

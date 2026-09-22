@@ -46,6 +46,7 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                 .map(|saved| saved.id)
                 .collect(),
         );
+        editor.set_repeat_available(last_repeatable.is_some());
         let prompt = format!(
             " run-cli:{} › ",
             session
@@ -94,11 +95,37 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                 let command = match action {
                     EditorAction::RunInteractive => "/run interactive".to_string(),
                     EditorAction::RunClipboard => "/run clipboard".to_string(),
+                    EditorAction::RepeatLast => {
+                        let Some(previous) = last_repeatable.clone() else {
+                            editor.begin_command("/again");
+                            editor.append_output(
+                                "✗ Error  nothing to repeat; run /run or /test first\n".as_bytes(),
+                            );
+                            continue;
+                        };
+                        previous
+                    }
+                    EditorAction::AddCase => "/case add".to_string(),
                     EditorAction::ToggleDebug => "/debug toggle".to_string(),
                     EditorAction::SelectText => unreachable!("handled by the editor"),
+                    EditorAction::More => match select_more_action(&session)? {
+                        Some(MoreAction::Command(command)) => command,
+                        Some(MoreAction::ClearOutput) => {
+                            editor.clear_output();
+                            continue;
+                        }
+                        Some(MoreAction::Message(message)) => {
+                            editor.append_output(message.as_bytes());
+                            continue;
+                        }
+                        None => continue,
+                    },
                     EditorAction::TestCase(id) => format!("/test {id}"),
                     EditorAction::TestAll => "/test all".to_string(),
                 };
+                if matches!(first_command(&command), "/open" | "/source") {
+                    last_repeatable = None;
+                }
                 if submit(&mut session, &mut editor, &command)? == SessionAction::Exit {
                     return Ok(0);
                 }
@@ -134,76 +161,98 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
     loop {
         editor.set_context("[no source]", "contest download", &mode, mouse);
         editor.set_case_ids(Vec::new());
-        match editor.read_line(" run-cli:[no source] › ")? {
-            EditorSignal::Success(line) => {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
-                if matches!(first_command(&line), "/exit" | "/quit") {
-                    return Ok(0);
-                }
-                if line == "/help" {
-                    editor.append_output(
-                        b"/contest [DIRECTORY] [--port PORT] [--wait SEC]\n  download a complete Competitive Companion contest\n/exit\n  leave run-cli\n",
-                    );
-                    continue;
-                }
-                if first_command(&line) != "/contest" {
-                    editor.append_output(
-                        "✗ Error  no source is active; use /contest to download a contest or /exit\n"
-                            .as_bytes(),
-                    );
-                    continue;
-                }
-                let tokens = match shell_words::split(&line) {
-                    Ok(tokens) => tokens,
-                    Err(error) => {
-                        editor.append_output(
-                            format!("✗ Error  cannot parse command: {error}\n").as_bytes(),
-                        );
+        editor.set_repeat_available(false);
+        let line = match editor.read_line(" run-cli:[no source] › ")? {
+            EditorSignal::Success(line) => line.trim().to_string(),
+            EditorSignal::Action(EditorAction::More) => {
+                const ITEMS: &[(&str, &str)] = &[
+                    ("Download contest here", "receive a complete contest batch"),
+                    ("Clear output", "clear retained workspace output"),
+                    ("Help", "show source-less session commands"),
+                    ("Exit", "leave Caseflow and restore the terminal"),
+                ];
+                match terminal::select_menu("More actions", ITEMS, mouse, ui.color_enabled())? {
+                    Some(0) => "/contest".to_string(),
+                    Some(1) => {
+                        editor.clear_output();
                         continue;
                     }
-                };
-                let (directory, port, wait) = match parse_empty_contest(&tokens) {
-                    Ok(values) => values,
-                    Err(error) => {
-                        editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes());
-                        continue;
-                    }
-                };
-                editor.begin_command(&line);
-                terminal::begin_workspace_output(mouse)?;
-                let captured = terminal::capture_output(mouse, || {
-                    commands::download_contest(&directory, port, wait, base_globals)
-                });
-                let restore = terminal::end_workspace_output();
-                let (result, captured) = captured?;
-                restore?;
-                editor.append_captured_output(&captured.output, &captured.input);
-                match result {
-                    Ok(Some(path)) => {
-                        drop(editor);
-                        let source = resolve_source(path).map_err(AppError::usage)?;
-                        return start(source, base_globals);
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes());
-                    }
+                    Some(2) => "/help".to_string(),
+                    Some(3) => "/exit".to_string(),
+                    _ => continue,
                 }
-                editor.set_mouse(mouse);
-                editor.set_color(ui.color_enabled());
             }
-            EditorSignal::Action(action) => match action {
-                EditorAction::SelectText => unreachable!("handled by the editor"),
-                _ => editor.append_output(
+            EditorSignal::Action(EditorAction::SelectText) => {
+                unreachable!("handled by the editor")
+            }
+            EditorSignal::Action(_) => {
+                editor.append_output(
                     "✗ Error  no source is active; use /contest to download a contest\n".as_bytes(),
-                ),
-            },
-            EditorSignal::CtrlC => editor.append_output(b"^C\n"),
+                );
+                continue;
+            }
+            EditorSignal::CtrlC => {
+                editor.append_output(b"^C\n");
+                continue;
+            }
             EditorSignal::CtrlD => return Ok(0),
+        };
+        if line.is_empty() {
+            continue;
         }
+        if matches!(first_command(&line), "/exit" | "/quit") {
+            return Ok(0);
+        }
+        if line == "/help" {
+            editor.append_output(
+                b"/contest [DIRECTORY] [--port PORT] [--wait SEC]\n  download a complete Competitive Companion contest\n/exit\n  leave run-cli\n",
+            );
+            continue;
+        }
+        if first_command(&line) != "/contest" {
+            editor.append_output(
+                "✗ Error  no source is active; use /contest to download a contest or /exit\n"
+                    .as_bytes(),
+            );
+            continue;
+        }
+        let tokens = match shell_words::split(&line) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                editor
+                    .append_output(format!("✗ Error  cannot parse command: {error}\n").as_bytes());
+                continue;
+            }
+        };
+        let (directory, port, wait) = match parse_empty_contest(&tokens) {
+            Ok(values) => values,
+            Err(error) => {
+                editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes());
+                continue;
+            }
+        };
+        editor.begin_command(&line);
+        terminal::begin_workspace_output(mouse)?;
+        let captured = terminal::capture_output(mouse, || {
+            commands::download_contest(&directory, port, wait, base_globals)
+        });
+        let restore = terminal::end_workspace_output();
+        let (result, captured) = captured?;
+        restore?;
+        editor.append_captured_output(&captured.output, &captured.input);
+        match result {
+            Ok(Some(path)) => {
+                drop(editor);
+                let source = resolve_source(path).map_err(AppError::usage)?;
+                return start(source, base_globals);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes());
+            }
+        }
+        editor.set_mouse(mouse);
+        editor.set_color(ui.color_enabled());
     }
 }
 
@@ -311,6 +360,77 @@ fn first_command(line: &str) -> &str {
 
 fn is_repeatable(line: &str) -> bool {
     matches!(first_command(line), "/run" | "/test")
+}
+
+enum MoreAction {
+    Command(String),
+    ClearOutput,
+    Message(String),
+}
+
+fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
+    const ITEMS: &[(&str, &str)] = &[
+        ("Open source", "switch source or open the fuzzy picker"),
+        ("Edit case", "edit a saved input in the external editor"),
+        ("Delete case", "delete a saved input after confirmation"),
+        (
+            "Import problem",
+            "receive one Competitive Companion problem",
+        ),
+        ("Download contest", "receive a complete contest batch"),
+        ("Clear output", "clear retained workspace output"),
+        ("Help", "show commands and keyboard controls"),
+        ("Exit", "leave Caseflow and restore the terminal"),
+    ];
+    let Some(selected) = terminal::select_menu(
+        "More actions",
+        ITEMS,
+        session.mouse,
+        session.ui.color_enabled(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let action = match selected {
+        0 => MoreAction::Command("/open".to_string()),
+        1 => return select_case_action(session, "Edit saved case", "/case edit"),
+        2 => return select_case_action(session, "Delete saved case", "/case delete"),
+        3 => MoreAction::Command("/companion".to_string()),
+        4 => MoreAction::Command("/contest".to_string()),
+        5 => MoreAction::ClearOutput,
+        6 => MoreAction::Command("/help".to_string()),
+        7 => MoreAction::Command("/exit".to_string()),
+        _ => return Ok(None),
+    };
+    Ok(Some(action))
+}
+
+fn select_case_action(
+    session: &Session,
+    title: &str,
+    command: &str,
+) -> AppResult<Option<MoreAction>> {
+    let saved = cases::list(&session.source)?;
+    if saved.is_empty() {
+        return Ok(Some(MoreAction::Message(
+            "✗ Error  no saved cases are available\n".to_string(),
+        )));
+    }
+    let labels = saved
+        .iter()
+        .map(|case| format!("Case #{}", case.id))
+        .collect::<Vec<_>>();
+    let descriptions = saved
+        .iter()
+        .map(|case| case.path.display().to_string())
+        .collect::<Vec<_>>();
+    let items = labels
+        .iter()
+        .zip(&descriptions)
+        .map(|(label, description)| (label.as_str(), description.as_str()))
+        .collect::<Vec<_>>();
+    let selected = terminal::select_menu(title, &items, session.mouse, session.ui.color_enabled())?;
+    Ok(selected.map(|index| MoreAction::Command(format!("{command} {}", saved[index].id))))
 }
 
 impl Session {
