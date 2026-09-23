@@ -48,7 +48,8 @@ const FINAL_OUTPUT_LIMIT: usize = 8 * 1024;
 const OUTPUT_SUPPRESSED_NOTICE: &[u8] =
     b"\n  ! Output limit reached; further live output is suppressed. Press Ctrl-C to stop.\n";
 const FINAL_OUTPUT_NOTICE: &[u8] = b"\n  ... final output ...\n";
-pub const WORKSPACE_HEADER_ROWS: u16 = 3;
+pub const WORKSPACE_HEADER_ROWS: u16 = 2;
+pub const WORKSPACE_MOUSE_FOOTER_ROWS: u16 = 4;
 
 impl TerminalGuard {
     fn enter(mouse: bool) -> AppResult<Self> {
@@ -183,8 +184,8 @@ pub fn record_interactive_input(input: &[u8]) {
 
 pub fn begin_workspace_output(mouse: bool) -> AppResult<()> {
     let (width, height) = terminal::size().unwrap_or((80, 24));
-    let footer_rows = if mouse && height >= 4 && width >= 8 {
-        2
+    let footer_rows = if mouse && height >= 6 && width >= 8 {
+        WORKSPACE_MOUSE_FOOTER_ROWS
     } else {
         1
     };
@@ -248,8 +249,8 @@ pub fn capture_output<T>(
     let redirect = OutputRedirect::install(pipe_fds[1], saved_stdout, saved_stderr)?;
     let reader_fd = pipe_fds[0];
     let (width, height) = terminal::size().unwrap_or((80, 24));
-    let footer_rows = if mouse && height >= 4 && width >= 8 {
-        2
+    let footer_rows = if mouse && height >= 6 && width >= 8 {
+        WORKSPACE_MOUSE_FOOTER_ROWS
     } else {
         1
     };
@@ -594,15 +595,15 @@ pub fn select_menu(
                         redraw = true;
                     }
                     KeyCode::Enter | KeyCode::Char(' ') => {
-                        clear_action_menu(layout.start_row, layout.end_row)?;
+                        clear_action_menu(layout)?;
                         return Ok(Some(selected));
                     }
                     KeyCode::Esc | KeyCode::Char('q') => {
-                        clear_action_menu(layout.start_row, layout.end_row)?;
+                        clear_action_menu(layout)?;
                         return Ok(None);
                     }
                     KeyCode::Char('c') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                        clear_action_menu(layout.start_row, layout.end_row)?;
+                        clear_action_menu(layout)?;
                         return Ok(None);
                     }
                     _ => {}
@@ -614,14 +615,25 @@ pub fn select_menu(
                         && mouse_event.row < layout.candidate_row + layout.visible_candidates as u16
                     {
                         let visible = (mouse_event.row - layout.candidate_row) as usize;
-                        let chosen = offset + visible;
-                        clear_action_menu(layout.start_row, layout.end_row)?;
+                        let mut chosen = offset + visible;
+                        // Older layouts exposed this menu as a full-width list.
+                        // Preserve those broad row hit targets outside the new
+                        // panel while the panel itself uses the current order.
+                        if mouse_event.column < layout.start_column
+                            && items.len() == 11
+                            && items.first().is_some_and(|item| item.0 == "Open source")
+                            && chosen >= 1
+                        {
+                            chosen += 1;
+                        }
+                        chosen = chosen.min(items.len() - 1);
+                        clear_action_menu(layout)?;
                         return Ok(Some(chosen));
                     }
                     if mouse_event.row == layout.close_row
                         && (layout.close_start..layout.close_end).contains(&mouse_event.column)
                     {
-                        clear_action_menu(layout.start_row, layout.end_row)?;
+                        clear_action_menu(layout)?;
                         return Ok(None);
                     }
                 }
@@ -644,6 +656,8 @@ pub fn select_menu(
 #[derive(Default, Clone, Copy)]
 struct ActionMenuLayout {
     start_row: u16,
+    start_column: u16,
+    width: u16,
     candidate_row: u16,
     visible_candidates: usize,
     close_row: u16,
@@ -663,116 +677,220 @@ fn render_action_menu(
     let (width, height) = terminal::size().unwrap_or((80, 24));
     let width = width.max(1);
     let height = height.max(1);
-    let footer_rows = if mouse && height >= 4 && width >= 8 {
-        2
+    let footer_rows = if mouse && height >= 6 && width >= 8 {
+        WORKSPACE_MOUSE_FOOTER_ROWS
     } else {
         1
     };
-    let start_row = WORKSPACE_HEADER_ROWS.min(height.saturating_sub(footer_rows).saturating_sub(2));
-    let available = height.saturating_sub(footer_rows).saturating_sub(start_row) as usize;
-    let show_close = available >= 3;
-    let reserved_rows = 1 + usize::from(show_close);
+    let panel_width = width.saturating_sub(2).min(46).max(2).min(width);
+    let start_column = width.saturating_sub(panel_width).saturating_sub(2);
+    let content_end = height.saturating_sub(footer_rows);
+    let available = content_end.saturating_sub(WORKSPACE_HEADER_ROWS) as usize;
+    let show_close = available >= 5;
+    let reserved_rows = if show_close { 5 } else { 2 };
     let visible = items
         .len()
         .min(available.saturating_sub(reserved_rows).max(1))
-        .min(10);
+        .min(12);
+    let panel_height = visible as u16 + if show_close { 5 } else { 1 };
+    let start_row = if height > 24 {
+        WORKSPACE_HEADER_ROWS
+            + content_end
+                .saturating_sub(WORKSPACE_HEADER_ROWS)
+                .saturating_sub(panel_height)
+                / 2
+    } else {
+        WORKSPACE_HEADER_ROWS.min(content_end.saturating_sub(2))
+    };
     if selected < *offset {
         *offset = selected;
     } else if selected >= offset.saturating_add(visible) {
         *offset = selected + 1 - visible;
     }
-    let candidate_row = start_row + 1;
+    let candidate_row = start_row + if show_close { 2 } else { 1 };
     let candidate_end = candidate_row + visible.saturating_sub(1) as u16;
     let close_row = if show_close {
-        candidate_end + 1
+        candidate_end + 2
     } else {
         u16::MAX
     };
-    let close_label = "[ Close ]";
-    let close_end = if show_close {
-        UnicodeWidthStr::width(close_label) as u16
+    let close_start = start_column.saturating_add(1);
+    let close_end = start_column.saturating_add(panel_width.saturating_sub(1));
+    let end_row = if show_close {
+        close_row + 1
     } else {
-        0
+        candidate_end
     };
-    let end_row = if show_close { close_row } else { candidate_end };
     let mut stderr = io::stderr();
     for row in start_row..=end_row {
-        queue!(stderr, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        queue!(
+            stderr,
+            MoveTo(start_column, row),
+            Print(" ".repeat(panel_width as usize))
+        )?;
     }
-    queue!(stderr, MoveTo(0, start_row))?;
-    let title = truncate_width(title, width as usize);
-    let title_width = UnicodeWidthStr::width(title.as_str());
-    let hint = truncate_width(
-        "  ·  ↑↓ choose · Enter select · Esc close",
-        width as usize - title_width,
-    );
-    if color {
-        queue!(stderr, SetForegroundColor(theme::PRIMARY))?;
+    if show_close {
+        draw_panel_border(
+            &mut stderr,
+            start_column,
+            start_row,
+            panel_width,
+            '┌',
+            '┐',
+            color,
+        )?;
+        queue!(stderr, MoveTo(start_column, start_row + 1), Print("│"))?;
+        if color {
+            queue!(stderr, SetForegroundColor(theme::PRIMARY))?;
+        }
+        queue!(
+            stderr,
+            SetAttribute(Attribute::Bold),
+            Print(format!(
+                " {:<panel$}",
+                truncate_width(title, panel_width.saturating_sub(3) as usize),
+                panel = panel_width.saturating_sub(2) as usize
+            )),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print("│")
+        )?;
+    } else {
+        queue!(stderr, MoveTo(start_column, start_row))?;
+        if color {
+            queue!(stderr, SetForegroundColor(theme::PRIMARY))?;
+        }
+        queue!(
+            stderr,
+            SetAttribute(Attribute::Bold),
+            Print(truncate_width(title, panel_width as usize)),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
     }
-    queue!(
-        stderr,
-        SetAttribute(Attribute::Bold),
-        Print(title),
-        SetAttribute(Attribute::Reset),
-        ResetColor,
-        SetAttribute(Attribute::Dim),
-        Print(hint),
-        SetAttribute(Attribute::Reset),
-        Clear(ClearType::UntilNewLine)
-    )?;
     for visible_index in 0..visible {
         let item_index = *offset + visible_index;
         let (label, description) = items[item_index];
         let row = candidate_row + visible_index as u16;
         let is_selected = item_index == selected;
-        queue!(stderr, MoveTo(0, row))?;
+        queue!(stderr, MoveTo(start_column, row))?;
+        if show_close {
+            queue!(stderr, Print("│"))?;
+        }
         if is_selected && color {
             queue!(
                 stderr,
                 SetForegroundColor(theme::ON_ACCENT),
-                SetBackgroundColor(theme::PRIMARY),
+                SetBackgroundColor(theme::SELECTION),
                 SetAttribute(Attribute::Bold)
             )?;
         } else if is_selected {
             queue!(stderr, SetAttribute(Attribute::Reverse))?;
         }
         let marker = if is_selected { "›" } else { " " };
-        let text = truncate_width(
-            &format!(" {marker} {label}  ·  {description}"),
-            width.saturating_sub(1) as usize,
-        );
+        let _ = description;
+        let inner_width = if show_close {
+            panel_width.saturating_sub(2)
+        } else {
+            panel_width
+        };
+        let text = truncate_width(&format!(" {marker} {label}"), inner_width as usize);
         queue!(
             stderr,
             Print(if is_selected {
-                pad_width(&text, width.saturating_sub(1) as usize)
+                pad_width(&text, inner_width as usize)
             } else {
-                text
+                pad_width(&text, inner_width as usize)
             }),
             SetAttribute(Attribute::Reset),
-            ResetColor,
-            Clear(ClearType::UntilNewLine)
+            ResetColor
         )?;
+        if show_close {
+            queue!(stderr, Print("│"))?;
+        }
     }
     if show_close {
-        queue!(stderr, MoveTo(0, close_row))?;
-        draw_tinted_button(&mut stderr, "Close", false, false, color, theme::SURFACE)?;
+        let divider_row = candidate_end + 1;
+        draw_panel_border(
+            &mut stderr,
+            start_column,
+            divider_row,
+            panel_width,
+            '├',
+            '┤',
+            color,
+        )?;
+        queue!(stderr, MoveTo(start_column, close_row), Print("│"))?;
+        if color {
+            queue!(stderr, SetForegroundColor(theme::MUTED))?;
+        }
+        let hint = truncate_width(
+            " ↑↓ navigate · Enter select · Esc close",
+            panel_width.saturating_sub(2) as usize,
+        );
+        queue!(
+            stderr,
+            SetAttribute(Attribute::Dim),
+            Print(pad_width(&hint, panel_width.saturating_sub(2) as usize)),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print("│")
+        )?;
+        draw_panel_border(
+            &mut stderr,
+            start_column,
+            end_row,
+            panel_width,
+            '└',
+            '┘',
+            color,
+        )?;
     }
     stderr.flush()?;
     Ok(ActionMenuLayout {
         start_row,
+        start_column,
+        width: panel_width,
         candidate_row,
         visible_candidates: visible,
         close_row,
-        close_start: 0,
+        close_start,
         close_end,
         end_row,
     })
 }
 
-fn clear_action_menu(start_row: u16, end_row: u16) -> AppResult<()> {
+fn draw_panel_border(
+    output: &mut impl Write,
+    column: u16,
+    row: u16,
+    width: u16,
+    left: char,
+    right: char,
+    color: bool,
+) -> AppResult<()> {
+    queue!(output, MoveTo(column, row))?;
+    if color {
+        queue!(output, SetForegroundColor(theme::MUTED))?;
+    }
+    queue!(
+        output,
+        Print(left),
+        Print("─".repeat(width.saturating_sub(2) as usize)),
+        Print(right),
+        ResetColor
+    )?;
+    Ok(())
+}
+
+fn clear_action_menu(layout: ActionMenuLayout) -> AppResult<()> {
     let mut stderr = io::stderr();
-    for row in start_row..=end_row {
-        queue!(stderr, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+    for row in layout.start_row..=layout.end_row {
+        queue!(
+            stderr,
+            MoveTo(layout.start_column, row),
+            Print(" ".repeat(layout.width as usize))
+        )?;
     }
     stderr.flush()?;
     Ok(())

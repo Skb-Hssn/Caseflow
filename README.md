@@ -256,10 +256,12 @@ run-cli --no-mouse A.cpp
 run-cli --debug A.cpp
 ```
 
-The workspace uses the terminal's alternate screen, like Vim. The header stays
-fixed at the top; program output and diagnostics occupy a scrollable middle
-viewport; the action bar and command prompt stay fixed at the bottom. `/exit`
-or Ctrl-D restores the previous terminal contents.
+The workspace uses the terminal's alternate screen, like Vim. A single fixed
+header shows `Caseflow`, its version, and the active source on the left, with
+the language, build mode, and mouse state aligned on the right. Program output
+and diagnostics occupy a scrollable middle viewport. Framing rules, the action
+bar, and the `caseflow:SOURCE ›` command prompt stay fixed at the bottom.
+`/exit` or Ctrl-D restores the previous terminal contents.
 
 Terminal state is also restored after handled errors, panics, and termination
 signals.
@@ -378,17 +380,21 @@ The fixed toolbar exposes the following compact controls:
 - **`[Select]`** releases the mouse for native terminal selection and copying.
 - **`[More]`** opens the overflow action menu.
 
-Run controls use the primary accent, saved tests use a softer accent, active
-debug mode is green, and inactive state controls remain neutral. The toolbar
-and prompt stay fixed on adjacent rows while only the output viewport scrolls.
+Controls are rendered as bracketed terminal text rather than filled buttons.
+Run, add-case, and More actions use the primary blue accent; active debug mode
+is green; numbered tests and unavailable controls use muted slate; and `[All]`
+uses the main text color. On wide terminals, subtle vertical dividers and
+flexible spacing separate the Run, Test, Debug, selection, and More groups.
+Only the output viewport scrolls.
 
-`[Again]` remains neutral until a repeatable command exists. The More menu is
-ordered around common actions: source switching and case editing; output and
-session utilities; Companion imports; deletion; diagnostics, help, and exit.
-It also exposes Session status and Check tools without adding permanent toolbar
-buttons. Choose with the mouse or with Up/Down and Enter; Esc closes the menu.
-Edit and Delete open a second saved-case picker, and deletion still requires
-confirmation.
+`[Again]` remains neutral until a repeatable command exists. `[More]` opens a
+bordered panel on the right side of the output viewport. Its actions are
+ordered around common tasks: source switching, editing the active file or a
+saved case, output and session utilities, Companion imports, deletion,
+diagnostics, help, and exit. It also exposes Session status and Check tools
+without adding permanent toolbar buttons. Choose with the mouse or with
+Up/Down and Enter; Esc closes the panel. Edit case and Delete case open a
+second saved-case picker, and deletion still requires confirmation.
 
 The toolbar becomes more compact on narrow terminals: `[Again]`, `[+Case]`,
 and `[More]` become `[R]`, `[+]`, and `[…]`, then single-character controls at

@@ -223,9 +223,9 @@ impl LineEditor {
                 .iter()
                 .rposition(|line| line.starts_with("━━ RUN · interactive input"))
                 .map_or(lines.len(), |index| index + 1);
-            let mut input_lines = vec!["  Input".to_string()];
-            input_lines.extend(transcript.lines().map(|line| format!("    {line}")));
-            input_lines.push("  Output".to_string());
+            let mut input_lines = vec!["Input".to_string()];
+            input_lines.extend(transcript.lines().map(str::to_owned));
+            input_lines.push("Output".to_string());
             lines.splice(insert_at..insert_at, input_lines);
         }
         self.output_lines.extend(lines);
@@ -367,17 +367,22 @@ impl LineEditor {
                 }
                 Event::Mouse(mouse_event) if mouse_capture => match mouse_event.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        let action = (mouse_event.row == layout.toolbar_row)
-                            .then(|| {
-                                layout
-                                    .toolbar_regions
-                                    .iter()
-                                    .find(|region| {
-                                        (region.start..region.end).contains(&mouse_event.column)
-                                    })
-                                    .map(|region| region.action)
-                            })
-                            .flatten();
+                        // Treat the lower frame rule as part of the toolbar's
+                        // hit target. Besides being easier to click, this keeps
+                        // controls usable in terminals that report border-row
+                        // clicks one cell below the painted label.
+                        let action = (mouse_event.row == layout.toolbar_row
+                            || mouse_event.row == layout.toolbar_row.saturating_add(1))
+                        .then(|| {
+                            layout
+                                .toolbar_regions
+                                .iter()
+                                .find(|region| {
+                                    (region.start..region.end).contains(&mouse_event.column)
+                                })
+                                .map(|region| region.action)
+                        })
+                        .flatten();
                         if let Some(action) = action {
                             if action == EditorAction::SelectText {
                                 terminal_state::enable_native_selection()?;
@@ -689,8 +694,12 @@ fn render_workspace(
     let height = height.max(1);
     // Keep the toolbar and prompt in a compact fixed footer so the output
     // viewport has as much room as possible while controls stay stable.
-    let show_toolbar = options.show_toolbar && height >= 4 && width >= 8;
-    let footer_rows = if show_toolbar { 2 } else { 1 };
+    let show_toolbar = options.show_toolbar && height >= 6 && width >= 8;
+    let footer_rows = if show_toolbar {
+        terminal_state::WORKSPACE_MOUSE_FOOTER_ROWS
+    } else {
+        1
+    };
     let header_rows = terminal_state::WORKSPACE_HEADER_ROWS
         .min(height.saturating_sub(footer_rows).saturating_sub(1));
     let prompt_row = height - 1;
@@ -761,7 +770,7 @@ fn render_workspace(
     }
 
     if show_toolbar {
-        let toolbar_row = height - 2;
+        let toolbar_row = height - 3;
         let toolbar_changed = state.toolbar_dirty
             || state.toolbar_size != Some((width, height))
             || state.toolbar.is_none();
@@ -779,6 +788,7 @@ fn render_workspace(
                 },
                 &mut layout,
             )?;
+            draw_footer_rules(&mut stderr, width, toolbar_row, options.color)?;
             state.toolbar = Some(toolbar_only(&layout));
             state.toolbar_size = Some((width, height));
             state.toolbar_dirty = false;
@@ -830,41 +840,132 @@ fn draw_workspace_header(
 ) -> AppResult<()> {
     for row in 0..rows {
         queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-        let text = match row {
-            0 => format!(
-                " run-cli  v{}  ·  {}",
-                env!("CARGO_PKG_VERSION"),
-                context.source
-            ),
-            1 => format!(
-                " {}  ·  {}  ·  mouse {}",
-                context.language,
-                context.mode,
-                if context.mouse { "on" } else { "off" }
-            ),
-            _ => "─".repeat(width as usize),
-        };
-        if color && row == 0 {
+        if row == 0 {
+            draw_header_status(output, width, context, color)?;
+        } else {
+            if color {
+                queue!(output, SetForegroundColor(theme::MUTED))?;
+            }
             queue!(
                 output,
-                SetForegroundColor(theme::PRIMARY),
-                SetAttribute(Attribute::Bold)
+                SetAttribute(Attribute::Dim),
+                Print("─".repeat(width as usize)),
+                SetAttribute(Attribute::Reset),
+                ResetColor
             )?;
-        } else if color && row == 1 {
-            queue!(output, SetForegroundColor(theme::MUTED))?;
-        } else if row == 0 {
-            queue!(output, SetAttribute(Attribute::Bold))?;
-        } else {
-            queue!(output, SetAttribute(Attribute::Dim))?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_header_status(
+    output: &mut impl Write,
+    width: u16,
+    context: &EditorContext,
+    color: bool,
+) -> AppResult<()> {
+    let source = std::path::Path::new(&context.source)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&context.source);
+    let left_plain = format!(" Caseflow  v{}  ·  {source}", env!("CARGO_PKG_VERSION"));
+    let right = format!(
+        "{}  ·  {}  ·  mouse {} ",
+        context.language,
+        context.mode,
+        if context.mouse { "on" } else { "off" }
+    );
+    let available_gap = (width as usize)
+        .saturating_sub(UnicodeWidthStr::width(left_plain.as_str()))
+        .saturating_sub(UnicodeWidthStr::width(right.as_str()));
+    if available_gap < 2 {
+        let compact = truncate_width(&format!("{left_plain}  ·  {right}"), width as usize);
+        if color {
+            queue!(output, SetForegroundColor(theme::PRIMARY))?;
         }
         queue!(
             output,
-            Print(truncate_width(&text, width as usize)),
+            SetAttribute(Attribute::Bold),
+            Print(compact),
             SetAttribute(Attribute::Reset),
             ResetColor,
             Clear(ClearType::UntilNewLine)
         )?;
+        return Ok(());
     }
+    let gap = available_gap;
+
+    if color {
+        queue!(
+            output,
+            Print(" "),
+            SetForegroundColor(theme::PRIMARY),
+            SetAttribute(Attribute::Bold),
+            Print("Caseflow"),
+            SetAttribute(Attribute::Reset),
+            SetForegroundColor(theme::MUTED),
+            Print(format!("  v{}  ·  ", env!("CARGO_PKG_VERSION"))),
+            SetForegroundColor(theme::ON_ACCENT),
+            SetAttribute(Attribute::Bold),
+            Print(source),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print(" ".repeat(gap)),
+            SetForegroundColor(theme::ON_ACCENT),
+            SetAttribute(Attribute::Bold),
+            Print(&context.language),
+            SetAttribute(Attribute::Reset),
+            SetForegroundColor(theme::MUTED),
+            Print("  ·  "),
+            SetForegroundColor(theme::ON_ACCENT),
+            SetAttribute(Attribute::Bold),
+            Print(&context.mode),
+            SetAttribute(Attribute::Reset),
+            SetForegroundColor(theme::MUTED),
+            Print(format!(
+                "  ·  mouse {} ",
+                if context.mouse { "on" } else { "off" }
+            )),
+            ResetColor,
+            Clear(ClearType::UntilNewLine)
+        )?;
+    } else {
+        queue!(
+            output,
+            SetAttribute(Attribute::Bold),
+            Print(truncate_width(
+                &format!("{left_plain}{}{right}", " ".repeat(gap)),
+                width as usize
+            )),
+            SetAttribute(Attribute::Reset),
+            Clear(ClearType::UntilNewLine)
+        )?;
+    }
+    Ok(())
+}
+
+fn draw_footer_rules(
+    output: &mut impl Write,
+    width: u16,
+    toolbar_row: u16,
+    color: bool,
+) -> AppResult<()> {
+    if toolbar_row == 0 {
+        return Ok(());
+    }
+    queue!(output, MoveTo(0, toolbar_row - 1))?;
+    if color {
+        queue!(output, SetForegroundColor(theme::MUTED))?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Dim),
+        Print("─".repeat(width as usize)),
+        MoveTo(0, toolbar_row + 1),
+        Print("─".repeat(width as usize)),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
     Ok(())
 }
 
@@ -1067,6 +1168,9 @@ fn draw_output_line(
     if color && !stale && trimmed.starts_with("Test summary") {
         return draw_test_summary_line(output, line, width, case_badge_statuses);
     }
+    if color && !stale && trimmed.starts_with("System status") {
+        return draw_system_status_line(output, line, width);
+    }
     if stale {
         queue!(output, SetAttribute(Attribute::Dim))?;
         if color {
@@ -1079,20 +1183,18 @@ fn draw_output_line(
                 SetForegroundColor(theme::PRIMARY),
                 SetAttribute(Attribute::Bold)
             )?;
-        } else if trimmed.starts_with("System status") {
+        } else if trimmed.starts_with('✓') || trimmed.starts_with("Success (exit") {
             queue!(
                 output,
-                SetForegroundColor(if trimmed.contains('✗') {
-                    theme::DANGER
-                } else {
-                    theme::SUCCESS
-                }),
-                SetAttribute(Attribute::Dim)
+                SetForegroundColor(theme::SUCCESS),
+                SetAttribute(Attribute::Bold)
             )?;
-        } else if trimmed.starts_with('✓') || trimmed.starts_with("Success (exit") {
-            queue!(output, SetForegroundColor(theme::SUCCESS))?;
         } else if trimmed.starts_with('✗') || trimmed.starts_with("Failed (exit") {
-            queue!(output, SetForegroundColor(theme::DANGER))?;
+            queue!(
+                output,
+                SetForegroundColor(theme::DANGER),
+                SetAttribute(Attribute::Bold)
+            )?;
         } else if trimmed.starts_with('!') || trimmed.contains("warning:") {
             queue!(output, SetForegroundColor(theme::WARNING))?;
         } else if matches!(trimmed, "Input" | "Output" | "Expected Output") {
@@ -1101,10 +1203,10 @@ fn draw_output_line(
                 SetForegroundColor(theme::ACCENT_ORANGE),
                 SetAttribute(Attribute::Bold)
             )?;
-        } else if line.starts_with("━━ File") {
+        } else if trimmed.starts_with("━━ File") {
             queue!(
                 output,
-                SetForegroundColor(theme::MUTED),
+                SetForegroundColor(theme::PRIMARY),
                 SetAttribute(Attribute::Bold)
             )?;
         } else if !trimmed.is_empty() && trimmed.chars().all(|character| character == '─') {
@@ -1113,14 +1215,14 @@ fn draw_output_line(
                 SetForegroundColor(theme::MUTED),
                 SetAttribute(Attribute::Dim)
             )?;
-        } else if line.starts_with("━━ ") {
+        } else if trimmed.starts_with("━━ ") {
             queue!(
                 output,
                 SetForegroundColor(theme::PRIMARY_SOFT),
                 SetAttribute(Attribute::Bold)
             )?;
         }
-    } else if line.starts_with("› ") || line.starts_with("━━ ") {
+    } else if line.starts_with("› ") || trimmed.starts_with("━━ ") {
         queue!(output, SetAttribute(Attribute::Bold))?;
     }
     queue!(
@@ -1129,6 +1231,44 @@ fn draw_output_line(
         SetAttribute(Attribute::Reset),
         ResetColor
     )?;
+    Ok(())
+}
+
+fn draw_system_status_line(output: &mut impl Write, line: &str, width: u16) -> AppResult<()> {
+    let visible = truncate_width(line, width as usize);
+    let leading = &visible[..visible.len() - visible.trim_start().len()];
+    let trimmed = visible.trim_start();
+    let Some(result) = trimmed.strip_prefix("System status  ·  ") else {
+        queue!(output, Print(visible))?;
+        return Ok(());
+    };
+    let (status, metrics) = result
+        .split_once("  ·  ")
+        .map_or((result, ""), |(status, metrics)| (status, metrics));
+    let failed = status.starts_with('✗');
+    queue!(
+        output,
+        Print(leading),
+        SetForegroundColor(theme::MUTED),
+        Print("System status  ·  "),
+        SetForegroundColor(if failed {
+            theme::DANGER
+        } else {
+            theme::SUCCESS
+        }),
+        SetAttribute(Attribute::Bold),
+        Print(status),
+        SetAttribute(Attribute::Reset)
+    )?;
+    if !metrics.is_empty() {
+        queue!(
+            output,
+            SetForegroundColor(theme::MUTED),
+            Print("  ·  "),
+            Print(metrics)
+        )?;
+    }
+    queue!(output, SetAttribute(Attribute::Reset), ResetColor)?;
     Ok(())
 }
 
@@ -1167,7 +1307,7 @@ fn draw_test_summary_line(
     let Some((prefix, badges)) = visible.rsplit_once("  ·  ") else {
         queue!(
             output,
-            SetForegroundColor(theme::PRIMARY_SOFT),
+            SetForegroundColor(theme::ON_ACCENT),
             SetAttribute(Attribute::Bold),
             Print(visible),
             SetAttribute(Attribute::Reset),
@@ -1177,12 +1317,11 @@ fn draw_test_summary_line(
     };
     queue!(
         output,
-        SetForegroundColor(theme::PRIMARY_SOFT),
+        SetForegroundColor(theme::ON_ACCENT),
         SetAttribute(Attribute::Bold),
         Print(prefix),
         SetAttribute(Attribute::Reset),
         SetForegroundColor(theme::MUTED),
-        SetAttribute(Attribute::Dim),
         Print("  ·  "),
         SetAttribute(Attribute::Reset)
     )?;
@@ -1239,7 +1378,7 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
         return Ok(());
     }
 
-    let Some(rest) = prompt.strip_prefix(" run-cli:") else {
+    let Some(rest) = prompt.strip_prefix(" caseflow:") else {
         queue!(
             output,
             SetForegroundColor(theme::PRIMARY),
@@ -1256,16 +1395,13 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
         Print(" "),
         SetForegroundColor(theme::PRIMARY),
         SetAttribute(Attribute::Bold),
-        Print("run-cli"),
+        Print("caseflow"),
         SetAttribute(Attribute::Reset),
         SetForegroundColor(theme::MUTED),
         Print(":"),
-        SetForegroundColor(theme::PRIMARY_SOFT),
-        SetAttribute(Attribute::Bold),
         Print(source),
         SetAttribute(Attribute::Reset),
-        SetForegroundColor(theme::PRIMARY),
-        SetAttribute(Attribute::Bold),
+        SetForegroundColor(theme::MUTED),
         Print(" › "),
         SetAttribute(Attribute::Reset),
         ResetColor
@@ -1465,7 +1601,7 @@ fn draw_toolbar(
             layout,
         )?;
     } else {
-        draw_toolbar_text(output, " Run  ", color, &mut column)?;
+        draw_toolbar_label(output, " Run  ", color, &mut column)?;
         draw_toolbar_action(
             output,
             "[Int]",
@@ -1499,7 +1635,14 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "   Test  ", color, &mut column)?;
+        let wide = width >= 120;
+        if wide {
+            pad_toolbar_to(output, width.saturating_mul(27) / 100, &mut column)?;
+            draw_toolbar_separator(output, color, &mut column)?;
+            draw_toolbar_label(output, " Test  ", color, &mut column)?;
+        } else {
+            draw_toolbar_text(output, "   Test  ", color, &mut column)?;
+        }
         draw_toolbar_action(
             output,
             "[+Case]",
@@ -1512,7 +1655,11 @@ fn draw_toolbar(
         draw_toolbar_text(output, " ", color, &mut column)?;
         draw_test_actions(
             output,
-            width.saturating_sub(32),
+            if wide {
+                width.saturating_mul(63) / 100
+            } else {
+                width.saturating_sub(32)
+            },
             options.case_ids,
             ToolbarDensity::Full,
             color,
@@ -1520,7 +1667,13 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "   Debug ", color, &mut column)?;
+        if wide {
+            pad_toolbar_to(output, width.saturating_mul(63) / 100, &mut column)?;
+            draw_toolbar_separator(output, color, &mut column)?;
+            draw_toolbar_label(output, " Debug ", color, &mut column)?;
+        } else {
+            draw_toolbar_text(output, "   Debug ", color, &mut column)?;
+        }
         draw_toolbar_action(
             output,
             if options.debug { "[On]" } else { "[Off]" },
@@ -1534,7 +1687,13 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, "   ", color, &mut column)?;
+        if wide {
+            pad_toolbar_to(output, width.saturating_sub(32), &mut column)?;
+            draw_toolbar_separator(output, color, &mut column)?;
+            draw_toolbar_text(output, " ", color, &mut column)?;
+        } else {
+            draw_toolbar_text(output, "   ", color, &mut column)?;
+        }
         draw_toolbar_action(
             output,
             "[Select]",
@@ -1548,13 +1707,17 @@ fn draw_toolbar(
             &mut column,
             layout,
         )?;
-        draw_toolbar_text(output, " ", color, &mut column)?;
+        if wide {
+            pad_toolbar_to(output, width.saturating_sub(12), &mut column)?;
+        } else {
+            draw_toolbar_text(output, " ", color, &mut column)?;
+        }
         draw_toolbar_action(
             output,
             "[More]",
             EditorAction::More,
             color,
-            theme::SURFACE,
+            theme::PRIMARY,
             &mut column,
             layout,
         )?;
@@ -1602,7 +1765,7 @@ fn draw_test_actions(
             &label,
             EditorAction::TestCase(*id),
             color,
-            background,
+            theme::SURFACE,
             column,
             layout,
         )?;
@@ -1617,7 +1780,7 @@ fn draw_test_actions(
             all_label,
             EditorAction::TestAll,
             color,
-            background,
+            if color { theme::ON_ACCENT } else { background },
             column,
             layout,
         )?;
@@ -1650,6 +1813,34 @@ fn draw_toolbar_text(
         ResetColor
     )?;
     *column = column.saturating_add(UnicodeWidthStr::width(text) as u16);
+    Ok(())
+}
+
+fn draw_toolbar_label(
+    output: &mut impl Write,
+    text: &str,
+    color: bool,
+    column: &mut u16,
+) -> AppResult<()> {
+    if color {
+        queue!(output, SetForegroundColor(theme::ON_ACCENT))?;
+    }
+    queue!(output, Print(text), ResetColor)?;
+    *column = column.saturating_add(UnicodeWidthStr::width(text) as u16);
+    Ok(())
+}
+
+fn draw_toolbar_separator(output: &mut impl Write, color: bool, column: &mut u16) -> AppResult<()> {
+    draw_toolbar_text(output, "│", color, column)
+}
+
+fn pad_toolbar_to(output: &mut impl Write, target: u16, column: &mut u16) -> AppResult<()> {
+    if *column >= target {
+        return Ok(());
+    }
+    let padding = target - *column;
+    queue!(output, Print(" ".repeat(padding as usize)))?;
+    *column = target;
     Ok(())
 }
 
@@ -1691,14 +1882,19 @@ fn draw_toolbar_button(
     output: &mut impl Write,
     label: &str,
     color: bool,
-    background: Color,
+    tint: Color,
 ) -> AppResult<()> {
     if color {
+        let disabled = tint == theme::SURFACE;
         queue!(
             output,
-            SetForegroundColor(theme::ON_ACCENT),
-            SetBackgroundColor(background),
-            SetAttribute(Attribute::Bold),
+            SetForegroundColor(if disabled { theme::MUTED } else { tint })
+        )?;
+        if !disabled {
+            queue!(output, SetAttribute(Attribute::Bold))?;
+        }
+        queue!(
+            output,
             Print(label),
             SetAttribute(Attribute::Reset),
             ResetColor

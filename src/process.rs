@@ -363,8 +363,6 @@ pub fn run(request: &RunRequest, ui: &Ui) -> AppResult<RunReport> {
         exit_code,
         interrupted,
         wall_time: started.elapsed(),
-        user_time: timeval_duration(usage.ru_utime),
-        system_time: timeval_duration(usage.ru_stime),
         peak_memory_kib: usage.ru_maxrss,
         timed_out,
     };
@@ -542,12 +540,6 @@ fn decode_wait_status(status: i32) -> i32 {
     } else {
         1
     }
-}
-
-fn timeval_duration(value: libc::timeval) -> Duration {
-    let seconds = value.tv_sec.max(0) as u64;
-    let micros = value.tv_usec.max(0) as u32;
-    Duration::new(seconds, micros.saturating_mul(1000))
 }
 
 #[cfg(test)]

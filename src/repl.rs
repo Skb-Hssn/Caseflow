@@ -48,7 +48,7 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
         );
         editor.set_repeat_available(last_repeatable.is_some());
         let prompt = format!(
-            " run-cli:{} › ",
+            " caseflow:{} › ",
             session
                 .source
                 .path
@@ -162,7 +162,7 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
         editor.set_context("[no source]", "contest download", &mode, mouse);
         editor.set_case_ids(Vec::new());
         editor.set_repeat_available(false);
-        let line = match editor.read_line(" run-cli:[no source] › ")? {
+        let line = match editor.read_line(" caseflow:[no source] › ")? {
             EditorSignal::Success(line) => line.trim().to_string(),
             EditorSignal::Action(EditorAction::More) => {
                 const ITEMS: &[(&str, &str)] = &[
@@ -415,6 +415,7 @@ enum MoreAction {
 fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
     const ITEMS: &[(&str, &str)] = &[
         ("Open source", "switch source or open the fuzzy picker"),
+        ("Edit file", "edit the active source file"),
         ("Edit case", "edit a saved input in the external editor"),
         ("Clear output", "clear retained workspace output"),
         (
@@ -442,15 +443,19 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
     };
     let action = match selected {
         0 => MoreAction::Command("/open".to_string()),
-        1 => return select_case_action(session, "Edit saved case", "/case edit"),
-        2 => MoreAction::ClearOutput,
-        3 => MoreAction::Command("/status".to_string()),
-        4 => MoreAction::Command("/companion".to_string()),
-        5 => MoreAction::Command("/contest".to_string()),
-        6 => return select_case_action(session, "Delete saved case", "/case delete"),
-        7 => MoreAction::Command("/doctor".to_string()),
-        8 => MoreAction::Command("/help".to_string()),
-        9 => MoreAction::Command("/exit".to_string()),
+        1 => MoreAction::Command(format!(
+            "/edit {}",
+            shell_words::quote(&session.source.path.to_string_lossy())
+        )),
+        2 => return select_case_action(session, "Edit saved case", "/case edit"),
+        3 => MoreAction::ClearOutput,
+        4 => MoreAction::Command("/status".to_string()),
+        5 => MoreAction::Command("/companion".to_string()),
+        6 => MoreAction::Command("/contest".to_string()),
+        7 => return select_case_action(session, "Delete saved case", "/case delete"),
+        8 => MoreAction::Command("/doctor".to_string()),
+        9 => MoreAction::Command("/help".to_string()),
+        10 => MoreAction::Command("/exit".to_string()),
         _ => return Ok(None),
     };
     Ok(Some(action))

@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-23
+
+### Added
+
+- Added an Edit file entry to the More actions panel for opening the active
+  source directly in the configured external editor.
+
+### Changed
+
+- Redesigned the interactive workspace around the Caseflow visual identity:
+  the header now presents the version and source alongside right-aligned
+  language, build-mode, and mouse status; the command prompt now uses the
+  `caseflow:` brand.
+- Reworked the fixed toolbar into unfilled, bracketed text controls with
+  responsive group separators and wide-screen alignment for Run, Test, Debug,
+  Select, and More.
+- Replaced the full-width More list with a bordered, right-aligned action panel
+  that uses full-row selection highlighting and an integrated keyboard hint.
+- Refined terminal colors and weights for file headings, input/output labels,
+  verdicts, system status details, test summaries, inactive controls, and
+  menu chrome.
+- Aligned saved-case file headings, input/output labels, separator rules,
+  system status, and test summaries at the left edge without extra padding.
+- Increased the vertical spacing between saved-case reports and before the
+  final test summary so adjacent cases remain visually distinct.
+- Removed the CPU percentage from run and system-status summaries, retaining
+  the exit status, wall-clock duration, and peak memory usage.
+- Aligned interactive input transcripts at the left edge by removing the
+  separate padding previously applied to their Input/Output labels and values.
+
 ## [0.14.0] - 2026-09-23
 
 ### Added

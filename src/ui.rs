@@ -34,15 +34,13 @@ impl Ui {
             return;
         }
         let detail = detail.as_ref();
-        let color = if self.color && title == "File" {
-            theme::ANSI_MUTED_BOLD
-        } else if self.color {
+        let color = if self.color {
             theme::ANSI_PRIMARY_BOLD
         } else {
             ""
         };
         let reset = if self.color { theme::ANSI_RESET } else { "" };
-        let width = terminal_width().min(88);
+        let width = terminal_width().min(110);
         let label = if detail.is_empty() {
             format!("━━ {title} ")
         } else {
@@ -61,7 +59,7 @@ impl Ui {
         if self.color {
             eprintln!(
                 "  {}✓ {}{}",
-                theme::ANSI_SUCCESS,
+                theme::ANSI_SUCCESS_BOLD,
                 message.as_ref(),
                 theme::ANSI_RESET
             );
@@ -133,20 +131,33 @@ impl Ui {
 
     pub fn case_report(&self, report: &RunReport) {
         if self.interactive {
-            let width = terminal_width().min(88);
+            let width = terminal_width().min(110);
             if self.color {
-                eprintln!("\x1b[38;5;245;2m{}{}", "─".repeat(width), theme::ANSI_RESET);
+                eprintln!("\x1b[38;5;103;2m{}{}", "─".repeat(width), theme::ANSI_RESET);
             } else {
                 eprintln!("{}", "─".repeat(width));
             }
             let summary = report_summary(report);
             if self.color {
-                let color = if report.timed_out || report.exit_code != 0 {
-                    theme::ANSI_DANGER_DIM
+                let (result_color, marker) = if report.timed_out || report.exit_code != 0 {
+                    (theme::ANSI_DANGER_BOLD, '✗')
                 } else {
-                    theme::ANSI_SUCCESS_DIM
+                    (theme::ANSI_SUCCESS_BOLD, '✓')
                 };
-                eprintln!("{color}System status  ·  {summary}{}", theme::ANSI_RESET);
+                let result = summary
+                    .strip_prefix(&format!("{marker} "))
+                    .unwrap_or(&summary);
+                let (status, metrics) = result
+                    .split_once("  ·  ")
+                    .map_or((result, ""), |(status, metrics)| (status, metrics));
+                eprint!(
+                    "\x1b[38;5;103mSystem status  ·  {result_color}{marker} {status}{}",
+                    theme::ANSI_RESET
+                );
+                if !metrics.is_empty() {
+                    eprint!("\x1b[38;5;103m  ·  {metrics}{}", theme::ANSI_RESET);
+                }
+                eprintln!();
             } else {
                 eprintln!("System status  ·  {summary}");
             }
@@ -154,6 +165,7 @@ impl Ui {
             self.report(report);
         }
         if self.interactive {
+            eprintln!();
             eprintln!();
         }
     }
@@ -169,15 +181,11 @@ impl Ui {
             .iter()
             .map(|id| (*id, theme::ANSI_SUCCESS))
             .chain(failed.iter().map(|id| (*id, theme::ANSI_DANGER_BOLD)))
-            .chain(unjudged.iter().map(|id| (*id, "\x1b[38;5;245;2m")))
+            .chain(unjudged.iter().map(|id| (*id, "\x1b[38;5;103;2m")))
             .collect::<Vec<_>>();
         badges.sort_unstable_by_key(|(id, _)| *id);
         if self.color {
-            eprint!(
-                "{}{prefix}{}  ·  ",
-                theme::ANSI_PRIMARY_BOLD,
-                theme::ANSI_RESET
-            );
+            eprint!("\x1b[1m{prefix}{}  ·  ", theme::ANSI_RESET);
             for (index, (id, color)) in badges.iter().enumerate() {
                 if index > 0 {
                     eprint!(" ");
@@ -197,12 +205,6 @@ impl Ui {
 }
 
 fn report_summary(report: &RunReport) -> String {
-    let cpu_seconds = report.user_time.as_secs_f64() + report.system_time.as_secs_f64();
-    let cpu = if report.wall_time.is_zero() {
-        0.0
-    } else {
-        cpu_seconds / report.wall_time.as_secs_f64() * 100.0
-    };
     let status = if report.timed_out {
         "Timed out".to_string()
     } else if report.exit_code == 0 {
@@ -216,9 +218,8 @@ fn report_summary(report: &RunReport) -> String {
         "✓"
     };
     format!(
-        "{marker} {status}  ·  {:.3}s  ·  CPU {:.0}%  ·  {}",
+        "{marker} {status}  ·  {:.3}s  ·  {}",
         report.wall_time.as_secs_f64(),
-        cpu,
         format_memory(report.peak_memory_kib)
     )
 }
@@ -277,14 +278,13 @@ mod tests {
             exit_code: 0,
             interrupted: false,
             wall_time: Duration::from_millis(10),
-            user_time: Duration::from_millis(2),
-            system_time: Duration::from_millis(1),
             peak_memory_kib: 4096,
             timed_out: false,
         };
         let summary = report_summary(&report);
         assert!(summary.starts_with("✓ Success (exit 0)  ·  0.010s"));
         assert!(summary.ends_with("4.0 MiB"));
+        assert!(!summary.contains("CPU"));
         assert!(!summary.contains('\n'));
     }
 }

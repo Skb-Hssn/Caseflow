@@ -206,14 +206,14 @@ fn ctrl_c_cancels_companion_wait_and_returns_to_repl() {
         return;
     };
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
-    let prompt_count = session.text().matches("run-cli:main.py").count();
+    session.wait_for("caseflow:main.py");
+    let prompt_count = session.text().matches("caseflow:main.py").count();
 
     session.send(format!("/companion --port {port} --wait 30\r").as_bytes());
     session.wait_for("Listening for Competitive Companion");
     session.send(b"\x03");
     session.wait_for("Competitive Companion import cancelled");
-    session.wait_for_count("run-cli:main.py", prompt_count + 1);
+    session.wait_for_count("caseflow:main.py", prompt_count + 1);
 
     session.send(b"/exit\r");
     assert!(session.wait().success());
@@ -236,7 +236,7 @@ fn repl_handles_resize_and_restores_terminal() {
          after=$(stty -g); test \"$before\" = \"$after\" && echo RESTORED=yes; exit $code",
     );
     let session = PtySession::spawn(command);
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     assert!(session.text().contains("\x1b[?1049h"));
     session.resize(8, 32);
     session.send(b"/status\r");
@@ -261,7 +261,7 @@ fn ctrl_c_interrupts_child_and_returns_to_repl() {
         "import time\nprint('child-started', flush=True)\ntime.sleep(30)\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/run\r");
     session.wait_for("child-started");
     session.send(b"\x03");
@@ -291,7 +291,7 @@ fn ctrl_c_stops_the_entire_saved_case_batch() {
     .unwrap();
 
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/test all\r");
     session.wait_for_sequence_since(run_offset, &["batch-case-start:hang"]);
@@ -302,7 +302,7 @@ fn ctrl_c_stops_the_entire_saved_case_batch() {
             "Failed (exit 130)",
             "Test run stopped by Ctrl-C after case #1",
             "1 remaining case(s) skipped",
-            "run-cli:main.py",
+            "caseflow:main.py",
         ],
     );
     assert!(
@@ -330,12 +330,12 @@ fn ctrl_c_force_stops_a_signal_ignoring_loop() {
         ),
     );
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/run\r");
     session.wait_for("stubborn-loop-started");
     session.send(b"\x03");
     session.wait_for("Failed (exit 130)");
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/exit\r");
     assert!(session.wait().success());
 }
@@ -348,7 +348,7 @@ fn one_ctrl_c_stops_an_infinite_output_loop_without_killing_repl() {
         "while True:\n    print('flood-output', flush=True)\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/run\r");
     session.wait_for_sequence_since(
@@ -360,9 +360,9 @@ fn one_ctrl_c_stops_an_infinite_output_loop_without_killing_repl() {
     );
     let interrupt_offset = session.output_len();
     session.send(b"\x03");
-    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.py"]);
+    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "caseflow:main.py"]);
     session.send(b"/status\r");
-    session.wait_for_sequence_since(interrupt_offset, &["Language", "run-cli:main.py"]);
+    session.wait_for_sequence_since(interrupt_offset, &["Language", "caseflow:main.py"]);
     session.send(b"/exit\r");
     assert!(session.wait().success());
 }
@@ -375,12 +375,12 @@ fn ordinary_output_larger_than_the_viewport_is_not_suppressed() {
         "for index in range(40):\n    print(f'ordinary-{index:02}', flush=True)\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/run\r");
     session.wait_for_sequence_since(
         run_offset,
-        &["ordinary-39", "Success (exit 0)", "run-cli:main.py"],
+        &["ordinary-39", "Success (exit 0)", "caseflow:main.py"],
     );
     let output = session.text_since(run_offset);
     assert!(
@@ -399,7 +399,7 @@ fn saved_case_with_expected_output_shows_a_pass_verdict() {
     fs::write(directory.path().join("main.in1"), "accepted\n").unwrap();
     fs::write(directory.path().join("main.out1"), "ACCEPTED\n").unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/test 1\r");
     session.wait_for_sequence_since(
@@ -408,7 +408,7 @@ fn saved_case_with_expected_output_shows_a_pass_verdict() {
             "ACCEPTED",
             "Case #1 verdict: PASS",
             "Verdict: PASS · 1/1 judged case(s) passed",
-            "run-cli:main.py",
+            "caseflow:main.py",
         ],
     );
     session.send(b"/exit\r");
@@ -426,7 +426,7 @@ fn failed_case_shows_expected_output_and_batch_summary() {
     fs::write(directory.path().join("main.in3"), "run only\n").unwrap();
 
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/test all\r");
     session.wait_for_sequence_since(
@@ -441,7 +441,7 @@ fn failed_case_shows_expected_output_and_batch_summary() {
             "[1]",
             "[2]",
             "[3]",
-            "run-cli:main.py",
+            "caseflow:main.py",
         ],
     );
     session.send(b"/exit\r");
@@ -458,13 +458,16 @@ fn unflushed_cpp_output_is_visible_while_the_program_is_running() {
     )
     .unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.cpp");
+    session.wait_for("caseflow:main.cpp");
     let run_offset = session.output_len();
     session.send(b"/run\r");
     session.wait_for_sequence_since(run_offset, &["unflushed-live-output"]);
     let interrupt_offset = session.output_len();
     session.send(b"\x03");
-    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.cpp"]);
+    session.wait_for_sequence_since(
+        interrupt_offset,
+        &["Failed (exit 130)", "caseflow:main.cpp"],
+    );
     session.send(b"/exit\r");
     assert!(session.wait().success());
 }
@@ -478,7 +481,7 @@ fn saved_case_output_is_visible_before_the_program_exits() {
     );
     fs::write(directory.path().join("main.in1"), "1\n").unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/test 1\r");
     session.wait_for_sequence_since(
@@ -487,7 +490,7 @@ fn saved_case_output_is_visible_before_the_program_exits() {
     );
     let interrupt_offset = session.output_len();
     session.send(b"\x03");
-    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "run-cli:main.py"]);
+    session.wait_for_sequence_since(interrupt_offset, &["Failed (exit 130)", "caseflow:main.py"]);
     session.send(b"/exit\r");
     assert!(session.wait().success());
 }
@@ -506,7 +509,7 @@ fn ctrl_c_stops_stress_testing_without_saving_a_false_mismatch() {
     )
     .unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let run_offset = session.output_len();
     session.send(b"/stress brute.py generator.py --runs 100 --timeout 60\r");
     let ready = directory.path().join("candidate-ready");
@@ -520,7 +523,7 @@ fn ctrl_c_stops_stress_testing_without_saving_a_false_mismatch() {
         run_offset,
         &[
             "Stress testing stopped during program on case 1",
-            "run-cli:main.py",
+            "caseflow:main.py",
         ],
     );
     assert!(!directory.path().join("main.in1").exists());
@@ -536,12 +539,12 @@ fn interactive_input_is_retained_after_enter() {
         "value = input()\nprint(f'answer:{value}')\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/run\r");
     session.wait_for("interactive input");
     session.send(b"hello-world\r");
     session.wait_for("answer:hello-world");
-    session.wait_for("    hello-world");
+    session.wait_for_count("hello-world", 3);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
@@ -556,7 +559,7 @@ fn mouse_click_selects_a_file_completion() {
     fs::write(directory.path().join("input-one.txt"), "2 3\n").unwrap();
     fs::write(directory.path().join("input-two.txt"), "7 8\n").unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, true));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/run --input input-\t");
     session.wait_for("[ Select ]");
     // Suggestions occupy the bottom of the viewport; the first item is row 20.
@@ -572,7 +575,7 @@ fn slash_opens_dimmed_commands_and_tab_accepts_one() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/");
     session.wait_for("Options");
     session.send(b"\t");
@@ -644,7 +647,7 @@ fn mouse_toolbar_more_menu_runs_the_selected_action() {
     // Help is the ninth menu item and appears on terminal row 13.
     session.send(b"\x1b[<0;5;13M");
     session.wait_for("KEYS");
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
@@ -697,11 +700,11 @@ fn mouse_toolbar_is_not_redrawn_while_typing() {
         !session.text().contains("\x1b[?1003h"),
         "mouse mode must not enable all-motion tracking"
     );
-    assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
+    assert_eq!(session.text().matches("caseflow:main.py").count(), 1);
     // An unsolicited pointer-motion report must not repaint any editor row.
     session.send(b"\x1b[<35;50;10M");
     thread::sleep(Duration::from_millis(100));
-    assert_eq!(session.text().matches("run-cli:main.py").count(), 1);
+    assert_eq!(session.text().matches("caseflow:main.py").count(), 1);
     assert_eq!(session.text().matches("[Int]").count(), 1);
     session.send(b"/xyz");
     session.wait_for("/xyz");
@@ -751,15 +754,15 @@ fn clipboard_run_alias_saves_and_runs_the_next_case() {
         .unwrap(),
     );
     let session = PtySession::spawn(command);
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"/run clipboard");
     session.wait_for("/run clipboard");
-    let prompt_count = session.text().matches("run-cli:main.py").count();
+    let prompt_count = session.text().matches("caseflow:main.py").count();
     session.send(b"\r");
     session.wait_for("Saved input #1");
     session.wait_for("File ·");
     session.wait_for("System status  ·  ✓ Success (exit 0)");
-    session.wait_for_count("run-cli:main.py", prompt_count + 1);
+    session.wait_for_count("caseflow:main.py", prompt_count + 1);
     session.send(b"/quit\r");
     assert!(session.wait().success());
     assert_eq!(
@@ -796,7 +799,7 @@ fn select_button_releases_mouse_for_native_copying() {
     session.wait_for("[Select]");
     session.send(b"/help\r");
     session.wait_for("KEYS");
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     session.send(b"\x1b[<0;66;23M");
     session.wait_for("wheel/↑↓ scroll");
     assert!(session.text().contains("\x1b[?1007h"));
@@ -804,9 +807,9 @@ fn select_button_releases_mouse_for_native_copying() {
     // terminal selection owns the mouse.
     session.send(b"\x1b[A");
     session.wait_for("↑ 3");
-    let prompt_count = session.text().matches("run-cli:main.py").count();
+    let prompt_count = session.text().matches("caseflow:main.py").count();
     session.send(b"\x1b");
-    session.wait_for_count("run-cli:main.py", prompt_count + 1);
+    session.wait_for_count("caseflow:main.py", prompt_count + 1);
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
@@ -822,14 +825,14 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     session.wait_for("[Int]");
     session.send(b"/run\r");
     session.wait_for("Success (exit 0)");
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let before = session.text();
     assert!(
-        before.contains("\x1b[4;22r"),
+        before.contains("\x1b[3;20r"),
         "live output must be confined between the fixed header and footer"
     );
     let before_len = before.len();
-    let title = format!(" run-cli  v{}  ·  ", env!("CARGO_PKG_VERSION"));
+    let title = format!(" Caseflow  v{}  ·  ", env!("CARGO_PKG_VERSION"));
     let header_count = before.matches(&title).count();
     let toolbar_count = before.matches("[Int]").count();
     for _ in 0..8 {
@@ -858,7 +861,7 @@ fn again_is_recoverable_and_keeps_repeating_the_latest_run() {
          print(f'repeat-run-{count}')\n",
     );
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
 
     let command_start = session.output_len();
     session.send(b"/again\r");
@@ -866,7 +869,7 @@ fn again_is_recoverable_and_keeps_repeating_the_latest_run() {
         command_start,
         &[
             "nothing to repeat; run /run or /test first",
-            "run-cli:main.py",
+            "caseflow:main.py",
         ],
     );
 
@@ -874,18 +877,18 @@ fn again_is_recoverable_and_keeps_repeating_the_latest_run() {
     session.send(b"/run\r");
     session.wait_for_sequence_since(
         command_start,
-        &["repeat-run-1", "Success (exit 0)", "run-cli:main.py"],
+        &["repeat-run-1", "Success (exit 0)", "caseflow:main.py"],
     );
 
     // An unrelated command must not replace the repeatable command.
     let command_start = session.output_len();
     session.send(b"/status\r");
-    session.wait_for_sequence_since(command_start, &["SESSION", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["SESSION", "caseflow:main.py"]);
     let command_start = session.output_len();
     session.send(b"/again\r");
     session.wait_for_sequence_since(
         command_start,
-        &["repeat-run-2", "Success (exit 0)", "run-cli:main.py"],
+        &["repeat-run-2", "Success (exit 0)", "caseflow:main.py"],
     );
 
     // `/again` must retain the expanded /run command instead of repeating itself.
@@ -893,7 +896,7 @@ fn again_is_recoverable_and_keeps_repeating_the_latest_run() {
     session.send(b"/again\r");
     session.wait_for_sequence_since(
         command_start,
-        &["repeat-run-3", "Success (exit 0)", "run-cli:main.py"],
+        &["repeat-run-3", "Success (exit 0)", "caseflow:main.py"],
     );
     assert_eq!(
         fs::read_to_string(directory.path().join("run-count.txt")).unwrap(),
@@ -910,19 +913,19 @@ fn clear_removes_retained_output_and_the_prompt_remains_usable() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), &format!("print('{MARKER}')\n"));
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
 
     let command_start = session.output_len();
     session.send(b"/run\r");
     session.wait_for_sequence_since(
         command_start,
-        &[MARKER, "Success (exit 0)", "run-cli:main.py"],
+        &[MARKER, "Success (exit 0)", "caseflow:main.py"],
     );
 
     let clear_offset = session.output_len();
     session.send(b"/clear\r/help clear\r");
     let help = "Clear retained output from the viewport.";
-    session.wait_for_sequence_since(clear_offset, &[help, "run-cli:main.py"]);
+    session.wait_for_sequence_since(clear_offset, &[help, "caseflow:main.py"]);
     // The first help line is emitted live. The following workspace render would
     // expose the old marker again if /clear had not removed retained lines.
     let after_clear = session.text_since(clear_offset);
@@ -941,36 +944,36 @@ fn canonical_session_controls_work_from_the_keyboard() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('ready')\n");
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
 
     let command_start = session.output_len();
     session.send(b"/debug on\r");
-    session.wait_for_sequence_since(command_start, &["Build mode: debug", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["Build mode: debug", "caseflow:main.py"]);
     let command_start = session.output_len();
     session.send(b"/debug off\r");
-    session.wait_for_sequence_since(command_start, &["Build mode: standard", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["Build mode: standard", "caseflow:main.py"]);
     let command_start = session.output_len();
     session.send(b"/debug\r");
-    session.wait_for_sequence_since(command_start, &["Build mode: debug", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["Build mode: debug", "caseflow:main.py"]);
     let command_start = session.output_len();
     session.send(b"/debug toggle\r");
-    session.wait_for_sequence_since(command_start, &["Build mode: standard", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["Build mode: standard", "caseflow:main.py"]);
 
     let command_start = session.output_len();
     session.send(b"/mouse\r");
     session.wait_for_sequence_since(
         command_start,
-        &["Mouse controls: on", "[Int]", "run-cli:main.py"],
+        &["Mouse controls: on", "[Int]", "caseflow:main.py"],
     );
     let command_start = session.output_len();
     session.send(b"/mouse\r");
-    session.wait_for_sequence_since(command_start, &["Mouse controls: off", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["Mouse controls: off", "caseflow:main.py"]);
 
     let command_start = session.output_len();
     session.send(b"/help run\r");
     session.wait_for_sequence_since(
         command_start,
-        &["/run clipboard [--timeout SEC]", "run-cli:main.py"],
+        &["/run clipboard [--timeout SEC]", "caseflow:main.py"],
     );
     session.send(b"/exit\r");
     assert!(session.wait().success());
@@ -983,7 +986,7 @@ fn enter_confirms_case_deletion() {
     let saved = directory.path().join("main.in2");
     fs::write(&saved, "delete me\n").unwrap();
     let session = PtySession::spawn(repl_command(&directory, &source, false));
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
 
     let command_start = session.output_len();
     session.send(b"/case delete 2\r");
@@ -1003,7 +1006,7 @@ fn enter_confirms_case_deletion() {
         "ignored input must not redraw and duplicate the confirmation"
     );
     session.send(b"\r");
-    session.wait_for_sequence_since(command_start, &["Deleted", "run-cli:main.py"]);
+    session.wait_for_sequence_since(command_start, &["Deleted", "caseflow:main.py"]);
     assert!(
         !saved.exists(),
         "Enter should confirm the focused delete action"
@@ -1052,13 +1055,13 @@ fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
     command.env("EDITOR", "/definitely/not/the/editor");
     command.env("EDITOR_STATE", &editor_state);
     let session = PtySession::spawn(command);
-    session.wait_for("run-cli:main.py");
-    let initial_prompt_count = session.text().matches("run-cli:main.py").count();
+    session.wait_for("caseflow:main.py");
+    let initial_prompt_count = session.text().matches("caseflow:main.py").count();
 
     session.send(b"/case add\r");
     session.wait_for("EDITOR_TTY_OK:1:quoted argument");
     session.wait_for("Added input #1");
-    session.wait_for_count("run-cli:main.py", initial_prompt_count + 1);
+    session.wait_for_count("caseflow:main.py", initial_prompt_count + 1);
     assert_eq!(
         fs::read_to_string(directory.path().join("main.in1")).unwrap(),
         "added through editor\n"
@@ -1067,7 +1070,7 @@ fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
     session.send(b"/case edit 1\r");
     session.wait_for("EDITOR_TTY_OK:2:quoted argument");
     session.wait_for("Updated input #1");
-    session.wait_for_count("run-cli:main.py", initial_prompt_count + 2);
+    session.wait_for_count("caseflow:main.py", initial_prompt_count + 2);
     assert_eq!(
         fs::read_to_string(directory.path().join("main.in1")).unwrap(),
         "edited through editor\n"
@@ -1076,7 +1079,7 @@ fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
     session.send(b"/case edit 1\r");
     session.wait_for("EDITOR_TTY_OK:3:quoted argument");
     session.wait_for("exited with status 23");
-    session.wait_for_count("run-cli:main.py", initial_prompt_count + 3);
+    session.wait_for_count("caseflow:main.py", initial_prompt_count + 3);
     assert_eq!(
         fs::read_to_string(directory.path().join("main.in1")).unwrap(),
         "edited through editor\n",
@@ -1142,7 +1145,7 @@ fn edit_command_creates_and_reopens_any_file() {
     let mut command = repl_command(&directory, &source, false);
     command.env("VISUAL", &external_editor);
     let session = PtySession::spawn(command);
-    session.wait_for("run-cli:main.py");
+    session.wait_for("caseflow:main.py");
     let target = directory.path().join("notes with spaces.txt");
 
     session.send(b"/edit 'notes with spaces.txt'\r");

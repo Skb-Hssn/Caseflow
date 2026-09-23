@@ -145,8 +145,6 @@ pub struct RunReport {
     pub exit_code: i32,
     pub interrupted: bool,
     pub wall_time: Duration,
-    pub user_time: Duration,
-    pub system_time: Duration,
     pub peak_memory_kib: i64,
     pub timed_out: bool,
 }
