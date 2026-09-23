@@ -11,6 +11,7 @@ use crossterm::style::{
 };
 use crossterm::terminal::{self, Clear, ClearType};
 use crossterm::{execute, queue};
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
@@ -904,6 +905,7 @@ fn draw_workspace_content(
         .iter()
         .rposition(|line| line.starts_with("› "))
         .unwrap_or(0);
+    let case_badge_statuses = collect_case_badge_statuses(&output_lines[latest_command..line_end]);
 
     for index in 0..output_rows {
         let row = start + index as u16;
@@ -916,6 +918,7 @@ fn draw_workspace_content(
                 width.saturating_sub(1),
                 color,
                 line_index < latest_command,
+                &case_badge_statuses,
             )?;
         }
     }
@@ -1058,8 +1061,12 @@ fn draw_output_line(
     width: u16,
     color: bool,
     stale: bool,
+    case_badge_statuses: &HashMap<u64, CaseBadgeStatus>,
 ) -> AppResult<()> {
     let trimmed = line.trim_start();
+    if color && !stale && trimmed.starts_with("Test summary") {
+        return draw_test_summary_line(output, line, width, case_badge_statuses);
+    }
     if stale {
         queue!(output, SetAttribute(Attribute::Dim))?;
         if color {
@@ -1088,7 +1095,7 @@ fn draw_output_line(
             queue!(output, SetForegroundColor(theme::DANGER))?;
         } else if trimmed.starts_with('!') || trimmed.contains("warning:") {
             queue!(output, SetForegroundColor(theme::WARNING))?;
-        } else if trimmed == "Input" || trimmed == "Output" {
+        } else if matches!(trimmed, "Input" | "Output" | "Expected Output") {
             queue!(
                 output,
                 SetForegroundColor(theme::ACCENT_ORANGE),
@@ -1122,6 +1129,87 @@ fn draw_output_line(
         SetAttribute(Attribute::Reset),
         ResetColor
     )?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaseBadgeStatus {
+    Passed,
+    Failed,
+}
+
+fn collect_case_badge_statuses(lines: &[String]) -> HashMap<u64, CaseBadgeStatus> {
+    lines
+        .iter()
+        .filter_map(|line| {
+            let (_, verdict) = line.trim_start().split_once("Case #")?;
+            let (id, result) = verdict.split_once(" verdict: ")?;
+            let id = id.parse::<u64>().ok()?;
+            let status = if result.starts_with("PASS") {
+                CaseBadgeStatus::Passed
+            } else if result.starts_with("FAIL") {
+                CaseBadgeStatus::Failed
+            } else {
+                return None;
+            };
+            Some((id, status))
+        })
+        .collect()
+}
+
+fn draw_test_summary_line(
+    output: &mut impl Write,
+    line: &str,
+    width: u16,
+    statuses: &HashMap<u64, CaseBadgeStatus>,
+) -> AppResult<()> {
+    let visible = truncate_width(line, width as usize);
+    let Some((prefix, badges)) = visible.rsplit_once("  ·  ") else {
+        queue!(
+            output,
+            SetForegroundColor(theme::PRIMARY_SOFT),
+            SetAttribute(Attribute::Bold),
+            Print(visible),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
+        return Ok(());
+    };
+    queue!(
+        output,
+        SetForegroundColor(theme::PRIMARY_SOFT),
+        SetAttribute(Attribute::Bold),
+        Print(prefix),
+        SetAttribute(Attribute::Reset),
+        SetForegroundColor(theme::MUTED),
+        SetAttribute(Attribute::Dim),
+        Print("  ·  "),
+        SetAttribute(Attribute::Reset)
+    )?;
+    for (index, badge) in badges.split_whitespace().enumerate() {
+        if index > 0 {
+            queue!(output, Print(" "))?;
+        }
+        let id = badge
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix(']'))
+            .and_then(|value| value.parse::<u64>().ok());
+        let (color, dim) = match id.and_then(|id| statuses.get(&id)) {
+            Some(CaseBadgeStatus::Passed) => (theme::SUCCESS, false),
+            Some(CaseBadgeStatus::Failed) => (theme::DANGER, false),
+            None => (theme::MUTED, true),
+        };
+        queue!(output, SetForegroundColor(color))?;
+        if dim {
+            queue!(output, SetAttribute(Attribute::Dim))?;
+        }
+        queue!(
+            output,
+            Print(badge),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
+    }
     Ok(())
 }
 
@@ -1751,6 +1839,18 @@ mod tests {
             strip_terminal_sequences("\x1b[31merror\x1b[0m\rprogress\n"),
             "error\nprogress\n"
         );
+    }
+
+    #[test]
+    fn case_badge_colors_are_derived_from_case_verdicts() {
+        let lines = vec![
+            "  ✓ Case #1 verdict: PASS · matches main.out1".to_string(),
+            "  ✗ Case #2 verdict: FAIL · output differs".to_string(),
+        ];
+        let statuses = collect_case_badge_statuses(&lines);
+        assert_eq!(statuses.get(&1), Some(&CaseBadgeStatus::Passed));
+        assert_eq!(statuses.get(&2), Some(&CaseBadgeStatus::Failed));
+        assert_eq!(statuses.get(&3), None);
     }
 
     #[test]

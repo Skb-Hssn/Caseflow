@@ -6,6 +6,19 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-23
+
+### Added
+
+- Failed saved cases now display their expected output before the case verdict.
+- Multi-case test runs now end with ordered, color-coded case badges: green for
+  passed, red for failed, and dim grey for unjudged cases.
+
+### Changed
+
+- Moved each saved-case verdict ahead of its system-status footer so the
+  verdict remains visually grouped with the corresponding input and output.
+
 ## [0.11.0] - 2026-09-22
 
 ### Added

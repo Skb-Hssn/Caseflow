@@ -494,10 +494,17 @@ For input `A.in4`, Caseflow looks for `A.out4`.
   for an exact byte-for-byte comparison.
 - Matching output produces a PASS verdict.
 - A mismatch, timeout, interruption, or runtime failure produces a FAIL verdict
-  and a nonzero test status.
+  and a nonzero test status. The expected output is printed inside the same
+  case block before its verdict and system-status footer.
 - If `A.out4` does not exist, the case remains run-only and receives no
   correctness verdict.
-- When multiple judged cases run, Caseflow prints a final aggregate verdict.
+- When multiple cases run and at least one is judged, Caseflow prints a final
+  aggregate verdict followed by case badges. Passed IDs are green, failed IDs
+  are red, and IDs without an expected output are dim grey:
+
+```text
+Test summary  ·  2/3 passed  ·  [1] [2] [3] [4]
+```
 
 Whitespace and final newlines matter. For example, `YES` and `YES ` are
 different outputs, and a missing final newline also causes a mismatch.

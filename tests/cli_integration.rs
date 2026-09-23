@@ -169,8 +169,14 @@ fn test_automatically_judges_matching_output_files() {
         diagnostics.contains("Case #2 verdict: FAIL"),
         "{diagnostics}"
     );
+    assert!(diagnostics.contains("Expected Output"), "{diagnostics}");
+    assert!(diagnostics.contains("something else"), "{diagnostics}");
     assert!(
         diagnostics.contains("Verdict: FAIL · 1/2 judged case(s) passed"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("Test summary  ·  1/2 passed  ·  [1] [2] [3]"),
         "{diagnostics}"
     );
     assert!(!diagnostics.contains("Case #3 verdict"), "{diagnostics}");

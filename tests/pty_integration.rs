@@ -371,6 +371,39 @@ fn saved_case_with_expected_output_shows_a_pass_verdict() {
 }
 
 #[test]
+fn failed_case_shows_expected_output_and_batch_summary() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip().upper())\n");
+    fs::write(directory.path().join("main.in1"), "accepted\n").unwrap();
+    fs::write(directory.path().join("main.out1"), "ACCEPTED\n").unwrap();
+    fs::write(directory.path().join("main.in2"), "actual two\n").unwrap();
+    fs::write(directory.path().join("main.out2"), "EXPECTED TWO\n").unwrap();
+    fs::write(directory.path().join("main.in3"), "run only\n").unwrap();
+
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/test all\r");
+    session.wait_for_sequence_since(
+        run_offset,
+        &[
+            "Expected Output",
+            "EXPECTED TWO",
+            "Case #2 verdict: FAIL",
+            "System status",
+            "main.in3",
+            "Test summary",
+            "[1]",
+            "[2]",
+            "[3]",
+            "run-cli:main.py",
+        ],
+    );
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn unflushed_cpp_output_is_visible_while_the_program_is_running() {
     let directory = TempDir::new().unwrap();
     let source = directory.path().join("main.cpp");

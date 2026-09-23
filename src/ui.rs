@@ -120,7 +120,7 @@ impl Ui {
 
     pub fn section_title(&self, title: &str) {
         if self.color {
-            let color = if matches!(title, "Input" | "Output") {
+            let color = if matches!(title, "Input" | "Output" | "Expected Output") {
                 theme::ANSI_ACCENT_ORANGE_BOLD
             } else {
                 theme::ANSI_PRIMARY_BOLD
@@ -160,6 +160,39 @@ impl Ui {
 
     pub fn report(&self, report: &RunReport) {
         eprintln!("  {}", report_summary(report));
+    }
+
+    pub fn case_summary(&self, passed: &[u64], failed: &[u64], unjudged: &[u64]) {
+        let judged = passed.len() + failed.len();
+        let prefix = format!("Test summary  ·  {}/{} passed", passed.len(), judged);
+        let mut badges = passed
+            .iter()
+            .map(|id| (*id, theme::ANSI_SUCCESS))
+            .chain(failed.iter().map(|id| (*id, theme::ANSI_DANGER_BOLD)))
+            .chain(unjudged.iter().map(|id| (*id, "\x1b[38;5;245;2m")))
+            .collect::<Vec<_>>();
+        badges.sort_unstable_by_key(|(id, _)| *id);
+        if self.color {
+            eprint!(
+                "{}{prefix}{}  ·  ",
+                theme::ANSI_PRIMARY_BOLD,
+                theme::ANSI_RESET
+            );
+            for (index, (id, color)) in badges.iter().enumerate() {
+                if index > 0 {
+                    eprint!(" ");
+                }
+                eprint!("{color}[{id}]{}", theme::ANSI_RESET);
+            }
+            eprintln!();
+        } else {
+            let badges = badges
+                .iter()
+                .map(|(id, _)| format!("[{id}]"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            eprintln!("{prefix}  ·  {badges}");
+        }
     }
 }
 

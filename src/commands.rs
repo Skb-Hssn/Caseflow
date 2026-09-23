@@ -405,14 +405,20 @@ pub fn run_saved_cases(
     }
     let product = build::build(source, build_mode, config, ui)?;
     let mut status = 0;
-    let mut judged = 0_usize;
-    let mut passed = 0_usize;
+    let selected_count = selected.len();
+    let mut passed_ids = Vec::new();
+    let mut failed_ids = Vec::new();
+    let mut unjudged_ids = Vec::new();
     for saved in selected {
         show_saved_case(&saved.path, ui)?;
         let expected = cases::expected_path(source, saved.id);
-        let actual = expected
+        let expected_contents = expected
             .is_file()
-            .then(|| temporary_path(config, &format!("case-{}-actual", saved.id)))
+            .then(|| fs::read(&expected))
+            .transpose()?;
+        let actual = expected_contents
+            .as_ref()
+            .map(|_| temporary_path(config, &format!("case-{}-actual", saved.id)))
             .transpose()?;
         let output = actual
             .as_ref()
@@ -437,28 +443,29 @@ pub fn run_saved_cases(
                 return Err(error);
             }
         };
-        ui.case_report(&report);
         if report.exit_code != 0 {
             status = report.exit_code;
         }
         if let Some(actual) = actual {
-            judged += 1;
+            let expected_contents = expected_contents
+                .as_deref()
+                .expect("captured output requires expected contents");
             let comparison = if report.success() {
-                fs::read(&actual)
-                    .and_then(|actual| fs::read(&expected).map(|expected| actual == expected))
+                fs::read(&actual).map(|actual| actual == expected_contents)
             } else {
                 Ok(false)
             };
             let _ = fs::remove_file(&actual);
             let matches = comparison?;
             if matches {
-                passed += 1;
+                passed_ids.push(saved.id);
                 ui.success(format!(
                     "Case #{} verdict: PASS · matches {}",
                     saved.id,
                     expected.display()
                 ));
             } else {
+                show_expected_output(expected_contents, ui)?;
                 let reason = if report.interrupted {
                     "program interrupted".to_string()
                 } else if report.timed_out {
@@ -469,12 +476,18 @@ pub fn run_saved_cases(
                     format!("output differs from {}", expected.display())
                 };
                 ui.failure(format!("Case #{} verdict: FAIL · {reason}", saved.id));
+                failed_ids.push(saved.id);
                 if status == 0 {
                     status = 1;
                 }
             }
+        } else {
+            unjudged_ids.push(saved.id);
         }
+        ui.case_report(&report);
     }
+    let judged = passed_ids.len() + failed_ids.len();
+    let passed = passed_ids.len();
     if judged > 0 {
         if passed == judged && status == 0 {
             ui.success(format!(
@@ -485,6 +498,9 @@ pub fn run_saved_cases(
                 "Verdict: FAIL · {passed}/{judged} judged case(s) passed"
             ));
         }
+    }
+    if selected_count > 1 && judged > 0 {
+        ui.case_summary(&passed_ids, &failed_ids, &unjudged_ids);
     }
     Ok(status)
 }
@@ -501,6 +517,15 @@ fn show_saved_case(path: &Path, ui: &Ui) -> AppResult<()> {
         eprintln!();
     }
     ui.section_title("Output");
+    Ok(())
+}
+
+fn show_expected_output(contents: &[u8], ui: &Ui) -> AppResult<()> {
+    ui.section_title("Expected Output");
+    io::stderr().write_all(contents)?;
+    if !contents.is_empty() && contents.last() != Some(&b'\n') {
+        eprintln!();
+    }
     Ok(())
 }
 
