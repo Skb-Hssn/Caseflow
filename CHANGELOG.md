@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-09-24
+
+### Changed
+
+- Increased the vertical spacing between saved-case reports and before the
+  final test summary so adjacent cases remain visually distinct.
+- Removed the CPU percentage from run and system-status summaries, retaining
+  the exit status, wall-clock duration, and peak memory usage.
+- Aligned interactive input transcripts at the left edge by removing the
+  separate padding previously applied to their Input/Output labels and values.
+
+### Fixed
+
+- Restored compatibility with the Rust 1.98 Clippy warning set used by CI,
+  including signal-handler casts, PTY reader control flow, and action-panel
+  rendering without changing runtime behavior.
+
 ## [0.15.0] - 2026-09-23
 
 ### Added
@@ -29,12 +46,6 @@ All notable changes to this project are documented here. The format follows
   menu chrome.
 - Aligned saved-case file headings, input/output labels, separator rules,
   system status, and test summaries at the left edge without extra padding.
-- Increased the vertical spacing between saved-case reports and before the
-  final test summary so adjacent cases remain visually distinct.
-- Removed the CPU percentage from run and system-status summaries, retaining
-  the exit status, wall-clock duration, and peak memory usage.
-- Aligned interactive input transcripts at the left edge by removing the
-  separate padding previously applied to their Input/Output labels and values.
 
 ## [0.14.0] - 2026-09-23
 

@@ -28,6 +28,10 @@ extern "C" fn forward_signal(signal: libc::c_int) {
     }
 }
 
+fn forward_signal_handler() -> libc::sighandler_t {
+    forward_signal as *const () as libc::sighandler_t
+}
+
 struct SignalGuard {
     old_int: libc::sighandler_t,
     old_term: libc::sighandler_t,
@@ -46,8 +50,8 @@ impl SignalGuard {
         }
         unsafe {
             Self {
-                old_int: libc::signal(libc::SIGINT, forward_signal as libc::sighandler_t),
-                old_term: libc::signal(libc::SIGTERM, forward_signal as libc::sighandler_t),
+                old_int: libc::signal(libc::SIGINT, forward_signal_handler()),
+                old_term: libc::signal(libc::SIGTERM, forward_signal_handler()),
             }
         }
     }
@@ -74,7 +78,7 @@ impl InterruptScope {
     pub fn install() -> Self {
         INTERRUPT_REQUESTED.store(false, Ordering::SeqCst);
         INTERRUPT_SCOPE_ACTIVE.store(true, Ordering::SeqCst);
-        let old_int = unsafe { libc::signal(libc::SIGINT, forward_signal as libc::sighandler_t) };
+        let old_int = unsafe { libc::signal(libc::SIGINT, forward_signal_handler()) };
         Self { old_int }
     }
 

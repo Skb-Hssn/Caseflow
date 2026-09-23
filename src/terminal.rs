@@ -682,7 +682,11 @@ fn render_action_menu(
     } else {
         1
     };
-    let panel_width = width.saturating_sub(2).min(46).max(2).min(width);
+    let panel_width = if width <= 2 {
+        width
+    } else {
+        width.saturating_sub(2).clamp(2, 46)
+    };
     let start_column = width.saturating_sub(panel_width).saturating_sub(2);
     let content_end = height.saturating_sub(footer_rows);
     let available = content_end.saturating_sub(WORKSPACE_HEADER_ROWS) as usize;
@@ -797,11 +801,7 @@ fn render_action_menu(
         let text = truncate_width(&format!(" {marker} {label}"), inner_width as usize);
         queue!(
             stderr,
-            Print(if is_selected {
-                pad_width(&text, inner_width as usize)
-            } else {
-                pad_width(&text, inner_width as usize)
-            }),
+            Print(pad_width(&text, inner_width as usize)),
             SetAttribute(Attribute::Reset),
             ResetColor
         )?;

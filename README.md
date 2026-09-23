@@ -590,12 +590,12 @@ run-cli [GLOBAL OPTIONS] COMMAND [COMMAND OPTIONS]
 
 These global execution options are accepted before or after subcommands:
 
-| Option                        | Meaning                                                 |
-| ----------------------------- | ------------------------------------------------------- |
-| `--debug`                   | Use debug compiler/runtime settings.                    |
+| Option                        | Meaning                                                     |
+| ----------------------------- | ----------------------------------------------------------- |
+| `--debug`                   | Use debug compiler/runtime settings.                        |
 | `--mouse`                   | Explicitly enable mouse controls, overriding configuration. |
-| `--no-mouse`                | Disable mouse controls when an interactive UI is opened. |
-| `--color auto\|always\|never` | Set color output policy.                                |
+| `--no-mouse`                | Disable mouse controls when an interactive UI is opened.    |
+| `--color auto\|always\|never` | Set color output policy.                                    |
 
 `--no-source` is a top-level session option rather than a subcommand option:
 

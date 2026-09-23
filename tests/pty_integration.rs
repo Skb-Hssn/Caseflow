@@ -43,10 +43,7 @@ impl PtySession {
         thread::spawn(move || {
             let mut buffer = [0_u8; 4096];
             let mut pending = Vec::new();
-            loop {
-                let Ok(count) = reader.read(&mut buffer) else {
-                    break;
-                };
+            while let Ok(count) = reader.read(&mut buffer) {
                 if count == 0 {
                     break;
                 }
