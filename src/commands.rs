@@ -409,7 +409,18 @@ pub fn run_saved_cases(
     let mut passed_ids = Vec::new();
     let mut failed_ids = Vec::new();
     let mut unjudged_ids = Vec::new();
+    let mut attempted_count = 0_usize;
+    let interrupt = process::InterruptScope::install();
     for saved in selected {
+        if interrupt.requested() {
+            let remaining = selected_count.saturating_sub(attempted_count);
+            status = 130;
+            ui.warning(format!(
+                "Test run stopped by Ctrl-C · {remaining} remaining case(s) skipped"
+            ));
+            break;
+        }
+        attempted_count += 1;
         show_saved_case(&saved.path, ui)?;
         let expected = cases::expected_path(source, saved.id);
         let expected_contents = expected
@@ -485,6 +496,14 @@ pub fn run_saved_cases(
             unjudged_ids.push(saved.id);
         }
         ui.case_report(&report);
+        if report.interrupted || interrupt.requested() {
+            let remaining = selected_count.saturating_sub(attempted_count);
+            ui.warning(format!(
+                "Test run stopped by Ctrl-C after case #{} · {remaining} remaining case(s) skipped",
+                saved.id
+            ));
+            break;
+        }
     }
     let judged = passed_ids.len() + failed_ids.len();
     let passed = passed_ids.len();

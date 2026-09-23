@@ -340,7 +340,7 @@ latest 1,000 commands.
 | `Ctrl-A` / `Ctrl-E`     | Move to the beginning or end of the command line.                   |
 | `Home` / `End`          | Move to the beginning or end; in selection mode, scroll fully.      |
 | `Page Up` / `Page Down` | Scroll retained output in selection mode.                           |
-| `Ctrl-C`                  | Clear an idle command or stop the active process and return.        |
+| `Ctrl-C`                  | Clear an idle command or cancel the active run/test batch.          |
 | `Ctrl-D`                  | Exit when the command line is empty.                                |
 
 ### Mouse controls and text selection
@@ -518,6 +518,10 @@ Run all cases or select specific IDs:
 /test 1,3,5
 /test last
 ```
+
+Press Ctrl-C while `/test` is running to stop the current program and cancel
+the rest of the batch. Caseflow reports how many cases were skipped and returns
+to the session prompt; a second Ctrl-C is not required.
 
 ```sh
 run-cli test A.cpp

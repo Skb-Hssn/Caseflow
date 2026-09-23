@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-23
+
+### Added
+
+- Ctrl-C now cancels the entire active saved-case batch, skips every remaining
+  case, reports the skipped count, and returns directly to the session prompt.
+
 ## [0.12.0] - 2026-09-23
 
 ### Added

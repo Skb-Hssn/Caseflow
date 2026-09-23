@@ -271,6 +271,51 @@ fn ctrl_c_interrupts_child_and_returns_to_repl() {
 }
 
 #[test]
+fn ctrl_c_stops_the_entire_saved_case_batch() {
+    let directory = TempDir::new().unwrap();
+    let source = source(
+        directory.path(),
+        concat!(
+            "import sys, time\n",
+            "value = sys.stdin.read().strip()\n",
+            "print(f'batch-case-start:{value}', flush=True)\n",
+            "if value == 'hang':\n",
+            "    time.sleep(30)\n",
+        ),
+    );
+    fs::write(directory.path().join("main.in1"), "hang\n").unwrap();
+    fs::write(
+        directory.path().join("main.in2"),
+        "second-case-must-not-run\n",
+    )
+    .unwrap();
+
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("run-cli:main.py");
+    let run_offset = session.output_len();
+    session.send(b"/test all\r");
+    session.wait_for_sequence_since(run_offset, &["batch-case-start:hang"]);
+    session.send(b"\x03");
+    session.wait_for_sequence_since(
+        run_offset,
+        &[
+            "Failed (exit 130)",
+            "Test run stopped by Ctrl-C after case #1",
+            "1 remaining case(s) skipped",
+            "run-cli:main.py",
+        ],
+    );
+    assert!(
+        !session
+            .text_since(run_offset)
+            .contains("batch-case-start:second-case-must-not-run"),
+        "the second saved case ran after Ctrl-C"
+    );
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn ctrl_c_force_stops_a_signal_ignoring_loop() {
     let directory = TempDir::new().unwrap();
     let source = source(
