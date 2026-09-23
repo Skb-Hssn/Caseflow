@@ -36,6 +36,12 @@ pub enum ExternalEditOutcome {
     Unchanged(SavedCase),
 }
 
+#[derive(Debug, Clone)]
+pub enum ExternalFileEditOutcome {
+    Created(PathBuf),
+    Edited(PathBuf),
+}
+
 pub struct CaseLock {
     file: File,
 }
@@ -414,6 +420,75 @@ pub fn edit_with_external_editor(
             let saved = save_bytes(source, None, &edited, config)?;
             Ok(ExternalEditOutcome::Added(saved))
         }
+    }
+}
+
+/// Open any regular file in the configured terminal editor, creating an empty
+/// file first when the target does not exist. Parent directories must already
+/// exist so a typo cannot create an unexpected directory tree.
+pub fn edit_file_with_external_editor(path: &Path) -> AppResult<ExternalFileEditOutcome> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() || !io::stderr().is_terminal() {
+        return Err(AppError::new(
+            "file editing requires an interactive terminal on stdin, stdout, and stderr",
+        ));
+    }
+    if path.as_os_str().is_empty() {
+        return Err(AppError::usage("usage: /edit PATH"));
+    }
+    if path.is_dir() {
+        return Err(AppError::new(format!(
+            "cannot edit '{}': path is a directory",
+            path.display()
+        )));
+    }
+    let editor = resolve_editor()?;
+    let existed = path.exists();
+    if existed && !path.is_file() {
+        return Err(AppError::new(format!(
+            "cannot edit '{}': path is not a regular file",
+            path.display()
+        )));
+    }
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|error| {
+            AppError::new(format!(
+                "cannot {} file '{}': {error}",
+                if existed { "open" } else { "create" },
+                path.display()
+            ))
+        })?;
+
+    let status = {
+        let _screen = terminal::suspend_screen()?;
+        Command::new(&editor.program)
+            .args(&editor.args)
+            .arg(path)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|error| {
+                AppError::new(format!(
+                    "could not start editor '{}': {error}",
+                    editor.program
+                ))
+            })?
+    };
+    if !status.success() {
+        return Err(AppError::new(format!(
+            "editor '{}' exited with status {}",
+            editor.program,
+            status.code().unwrap_or(1)
+        )));
+    }
+    if existed {
+        Ok(ExternalFileEditOutcome::Edited(path.to_path_buf()))
+    } else {
+        Ok(ExternalFileEditOutcome::Created(path.to_path_buf()))
     }
 }
 

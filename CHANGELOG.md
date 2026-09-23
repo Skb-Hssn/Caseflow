@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-23
+
+### Added
+
+- Added `/edit PATH` in normal and source-less sessions to open any file in
+  the configured terminal editor and create the file when it is missing.
+- Added all-file path completion for `/edit`, including quoted paths with
+  spaces.
+
 ## [0.13.0] - 2026-09-23
 
 ### Added

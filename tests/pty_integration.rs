@@ -1121,3 +1121,40 @@ fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
     session.send(b"/quit\r");
     assert!(session.wait().success());
 }
+
+#[test]
+fn edit_command_creates_and_reopens_any_file() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let external_editor = directory.path().join("generic-editor.sh");
+    fs::write(
+        &external_editor,
+        "#!/bin/sh\n\
+         set -eu\n\
+         test -t 0 && test -t 1 && test -t 2 || exit 91\n\
+         test -f \"$1\" || exit 92\n\
+         printf 'GENERIC_EDITOR:%s\\n' \"$1\"\n\
+         printf 'edited\\n' >> \"$1\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&external_editor, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut command = repl_command(&directory, &source, false);
+    command.env("VISUAL", &external_editor);
+    let session = PtySession::spawn(command);
+    session.wait_for("run-cli:main.py");
+    let target = directory.path().join("notes with spaces.txt");
+
+    session.send(b"/edit 'notes with spaces.txt'\r");
+    session.wait_for("GENERIC_EDITOR:notes with spaces.txt");
+    session.wait_for("Created file  notes with spaces.txt");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "edited\n");
+
+    session.send(b"/edit 'notes with spaces.txt'\r");
+    session.wait_for_count("GENERIC_EDITOR:notes with spaces.txt", 2);
+    session.wait_for("Edited file  notes with spaces.txt");
+    assert_eq!(fs::read_to_string(&target).unwrap(), "edited\nedited\n");
+
+    session.send(b"/exit\r");
+    assert!(session.wait().success());
+}

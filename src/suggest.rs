@@ -11,6 +11,7 @@ const REPL_COMMANDS: &[(&str, &str)] = &[
     ("/stress", "run differential stress tests"),
     ("/contest", "download a complete contest"),
     ("/companion", "import samples from Competitive Companion"),
+    ("/edit", "edit any file or create a new file"),
     ("/open", "switch the active source"),
     ("/debug", "toggle debug builds"),
     ("/mouse", "toggle mouse controls"),
@@ -45,6 +46,7 @@ const HELP_TOPICS: &[(&str, &str)] = &[
     ("stress", "run differential stress tests"),
     ("contest", "download a complete contest"),
     ("companion", "import samples from Competitive Companion"),
+    ("edit", "edit any file or create a new file"),
     ("open", "switch the active source"),
     ("debug", "toggle debug builds"),
     ("mouse", "toggle mouse controls"),
@@ -68,6 +70,7 @@ pub struct Completion {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PathKind {
     Directory,
+    File,
     Source,
     Input,
     Output,
@@ -234,6 +237,7 @@ fn expected_path_kind(tokens: &[String], trailing_space: bool, repl: bool) -> Op
             Some(PathKind::Directory)
         }
         "/open" | "/source" if relative == 1 => Some(PathKind::Source),
+        "/edit" if relative == 1 => Some(PathKind::File),
         "/compare" | "/diff" if relative == 2 => Some(PathKind::Expected),
         "/stress"
             if (relative == 1
@@ -608,6 +612,10 @@ mod tests {
             Some(PathKind::Source)
         );
         assert_eq!(
+            expected_path_kind(&loose_tokens("/edit "), true, true),
+            Some(PathKind::File)
+        );
+        assert_eq!(
             expected_path_kind(&loose_tokens("/diff 1 "), true, true),
             Some(PathKind::Expected)
         );
@@ -662,7 +670,9 @@ mod tests {
             .into_iter()
             .map(|candidate| candidate.value)
             .collect::<Vec<_>>();
-        for command in ["/open", "/debug", "/compare", "/again", "/clear", "/exit"] {
+        for command in [
+            "/edit", "/open", "/debug", "/compare", "/again", "/clear", "/exit",
+        ] {
             assert!(repl.contains(&command.to_string()), "missing {command}");
         }
         for alias in ["/source", "/mode", "/diff", "/quit"] {

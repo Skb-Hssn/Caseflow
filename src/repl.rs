@@ -143,9 +143,9 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
     }
 }
 
-/// Start an interactive workspace before a source file exists. The only
-/// source-less action is contest download; after the batch arrives, the
-/// regular source session opens on the generated `A.cpp` file.
+/// Start an interactive workspace before a source file exists. Files may be
+/// edited directly, or a contest can be downloaded and opened as a regular
+/// source session on the generated `A.cpp` file.
 pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
     let (config, ui) = commands::configured(None, base_globals)?;
     let mut editor = LineEditor::new(
@@ -205,14 +205,34 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
         }
         if line == "/help" {
             editor.append_output(
-                b"/contest [DIRECTORY] [--port PORT] [--wait SEC]\n  download a complete Competitive Companion contest\n/exit\n  leave run-cli\n",
+                b"/edit PATH\n  edit any file; create it if missing\n/contest [DIRECTORY] [--port PORT] [--wait SEC]\n  download a complete Competitive Companion contest\n/exit\n  leave run-cli\n",
+            );
+            continue;
+        }
+        if first_command(&line) == "/edit" {
+            let tokens = match shell_words::split(&line) {
+                Ok(tokens) => tokens,
+                Err(error) => {
+                    editor.append_output(
+                        format!("✗ Error  cannot parse command: {error}\n").as_bytes(),
+                    );
+                    continue;
+                }
+            };
+            if tokens.len() != 2 {
+                editor.append_output("✗ Error  usage: /edit PATH\n".as_bytes());
+                continue;
+            }
+            editor.begin_command(&line);
+            append_file_edit_result(
+                &mut editor,
+                cases::edit_file_with_external_editor(Path::new(&tokens[1])),
             );
             continue;
         }
         if first_command(&line) != "/contest" {
             editor.append_output(
-                "✗ Error  no source is active; use /contest to download a contest or /exit\n"
-                    .as_bytes(),
+                "✗ Error  no source is active; use /edit, /contest, or /exit\n".as_bytes(),
             );
             continue;
         }
@@ -310,11 +330,12 @@ struct Session {
     base_globals: GlobalOptions,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum SessionAction {
     Continue,
     Exit,
     EditCase(Option<u64>),
+    EditFile(PathBuf),
 }
 
 fn submit(
@@ -335,23 +356,46 @@ fn submit(
     let (action, captured) = captured?;
     restore?;
     editor.append_captured_output(&captured.output, &captured.input);
-    if let SessionAction::EditCase(id) = action {
-        let result = cases::edit_with_external_editor(&session.source, id, &session.config);
-        match result {
-            Ok(cases::ExternalEditOutcome::Added(saved)) => editor.append_output(
-                format!("✓ Added input #{}  {}\n", saved.id, saved.path.display()).as_bytes(),
-            ),
-            Ok(cases::ExternalEditOutcome::Updated(saved)) => editor.append_output(
-                format!("✓ Updated input #{}  {}\n", saved.id, saved.path.display()).as_bytes(),
-            ),
-            Ok(cases::ExternalEditOutcome::Unchanged(saved)) => editor.append_output(
-                format!("Input #{} unchanged  {}\n", saved.id, saved.path.display()).as_bytes(),
-            ),
-            Err(error) => editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes()),
+    match action {
+        SessionAction::EditCase(id) => {
+            let result = cases::edit_with_external_editor(&session.source, id, &session.config);
+            match result {
+                Ok(cases::ExternalEditOutcome::Added(saved)) => editor.append_output(
+                    format!("✓ Added input #{}  {}\n", saved.id, saved.path.display()).as_bytes(),
+                ),
+                Ok(cases::ExternalEditOutcome::Updated(saved)) => editor.append_output(
+                    format!("✓ Updated input #{}  {}\n", saved.id, saved.path.display()).as_bytes(),
+                ),
+                Ok(cases::ExternalEditOutcome::Unchanged(saved)) => editor.append_output(
+                    format!("Input #{} unchanged  {}\n", saved.id, saved.path.display()).as_bytes(),
+                ),
+                Err(error) => {
+                    editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes())
+                }
+            }
+            Ok(SessionAction::Continue)
         }
-        return Ok(SessionAction::Continue);
+        SessionAction::EditFile(path) => {
+            append_file_edit_result(editor, cases::edit_file_with_external_editor(&path));
+            Ok(SessionAction::Continue)
+        }
+        action => Ok(action),
     }
-    Ok(action)
+}
+
+fn append_file_edit_result(
+    editor: &mut LineEditor,
+    result: AppResult<cases::ExternalFileEditOutcome>,
+) {
+    match result {
+        Ok(cases::ExternalFileEditOutcome::Created(path)) => {
+            editor.append_output(format!("✓ Created file  {}\n", path.display()).as_bytes())
+        }
+        Ok(cases::ExternalFileEditOutcome::Edited(path)) => {
+            editor.append_output(format!("✓ Edited file  {}\n", path.display()).as_bytes())
+        }
+        Err(error) => editor.append_output(format!("✗ Error  {}\n", error.message).as_bytes()),
+    }
 }
 
 fn first_command(line: &str) -> &str {
@@ -507,6 +551,12 @@ impl Session {
                     if self.mouse { "on" } else { "off" }
                 ));
                 Ok(SessionAction::Continue)
+            }
+            "/edit" => {
+                if tokens.len() != 2 {
+                    return Err(AppError::usage("usage: /edit PATH"));
+                }
+                Ok(SessionAction::EditFile(PathBuf::from(&tokens[1])))
             }
             "/open" | "/source" => {
                 if tokens.len() > 2 {
@@ -784,6 +834,7 @@ fn print_help(topic: Option<&str>) {
             "stress" => "/stress BRUTE GENERATOR [--runs N] [--timeout SEC]",
             "contest" => "/contest [--port PORT] [--wait SEC]\nDownload a complete contest from Competitive Companion.",
             "companion" => "/companion [contest] [--port PORT] [--wait SEC]\nWait for one problem, or collect a complete contest batch, from Competitive Companion.",
+            "edit" => "/edit PATH\nOpen any file in the configured editor; create it if missing.",
             "open" | "source" => "/open [PATH]\nWith no path, open the fuzzy source picker.",
             "debug" | "mode" => "/debug [on|off|toggle]\nWith no value, toggle debug mode.",
             "mouse" => "/mouse [on|off|toggle]\nWith no value, toggle mouse controls.",
@@ -820,6 +871,7 @@ CASES
                           import one problem or a complete contest batch
 
 SESSION
+  /edit PATH           edit any file; create it if missing
   /open [PATH]          switch the active source
   /debug [on|off|toggle]
   /mouse [on|off|toggle]

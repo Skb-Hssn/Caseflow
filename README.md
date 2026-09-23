@@ -69,7 +69,8 @@ Optional integrations use:
 
 - `wl-copy` and `wl-paste` on Wayland, or `xclip` on X11, for clipboard
   operations.
-- `$VISUAL`, `$EDITOR`, `nvim`, or `vim` for `/case add` and `/case edit`.
+- `$VISUAL`, `$EDITOR`, `nvim`, or `vim` for `/edit`, `/case add`, and
+  `/case edit`.
 - `diff` for unified output from the explicit `compare` command. Caseflow falls
   back to printing both files if `diff` is unavailable.
 - A terminal with ANSI escape-sequence support for the full-screen workspace.
@@ -157,8 +158,8 @@ At the source-less prompt, run:
 
 The contest receiver creates `A.cpp`, `B.cpp`, and the corresponding sample
 case files in that directory, then opens the normal workspace on `A.cpp`.
-Until the contest has been received, a source-less session intentionally
-accepts only `/contest`, `/help`, and `/exit` (or `/quit`). Ctrl-D also exits.
+Until the contest has been received, a source-less session accepts `/edit`,
+`/contest`, `/help`, and `/exit` (or `/quit`). Ctrl-D also exits.
 
 Then enter:
 
@@ -277,6 +278,7 @@ signals.
 | `/case paste [ID] [--run]`          | Append clipboard input, or replace a specified ID.                                                                                            |
 | `/case add`                         | Create the next saved input in an external editor.                                                                                            |
 | `/case edit ID`                     | Edit an existing input in an external editor.                                                                                                 |
+| `/edit PATH`                        | Edit any file in an external editor, creating the file when missing.                                                                          |
 | `/case delete ID`                   | Confirm and delete an input and its paired expected output.                                                                                   |
 | `/case clear`                       | Confirm and delete every case for the active source.                                                                                          |
 | `/compare ID EXPECTED`              | Run one case and compare it with an arbitrary expected file.                                                                                  |
@@ -463,6 +465,18 @@ run-cli case edit A.cpp 2
 Editor selection order is `$VISUAL`, `$EDITOR`, `nvim`, then `vim`. The edit is
 staged in the cache and committed atomically only when the editor exits
 successfully. A failed or cancelled edit leaves the saved case unchanged.
+
+Edit any project file without leaving Caseflow:
+
+```text
+/edit A.cpp
+/edit "notes with spaces.txt"
+```
+
+`/edit` opens existing files directly and creates an empty file first when the
+target is missing. Its parent directory must already exist. The Caseflow
+workspace is suspended while the editor owns the terminal and restored when
+the editor exits.
 
 Use the clipboard:
 
