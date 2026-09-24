@@ -4,9 +4,12 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+static LOOPBACK_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn binary() -> &'static str {
     env!("CARGO_BIN_EXE_run-cli")
@@ -58,6 +61,12 @@ fn unused_loopback_port() -> Option<u16> {
         }
         Err(error) => panic!("could not reserve a loopback port: {error}"),
     }
+}
+
+fn loopback_test_guard() -> MutexGuard<'static, ()> {
+    LOOPBACK_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn connect_with_retry(port: u16) -> TcpStream {
@@ -586,6 +595,7 @@ fn dynamic_shell_completion_uses_ranked_file_suggestions() {
 
 #[test]
 fn competitive_companion_imports_paired_samples_without_overwriting() {
+    let _loopback_guard = loopback_test_guard();
     let directory = TempDir::new().unwrap();
     let source = directory.path().join("main.py");
     fs::write(&source, "print(input())\n").unwrap();
@@ -650,6 +660,7 @@ fn competitive_companion_imports_paired_samples_without_overwriting() {
 
 #[test]
 fn competitive_companion_collects_a_complete_contest_batch() {
+    let _loopback_guard = loopback_test_guard();
     let directory = TempDir::new().unwrap();
     let source = directory.path().join("A.cpp");
     fs::write(
@@ -715,6 +726,7 @@ fn competitive_companion_collects_a_complete_contest_batch() {
 
 #[test]
 fn competitive_companion_contest_without_source_creates_a_workspace() {
+    let _loopback_guard = loopback_test_guard();
     let directory = TempDir::new().unwrap();
     let Some(port) = unused_loopback_port() else {
         return;

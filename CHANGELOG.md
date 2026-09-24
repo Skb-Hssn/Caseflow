@@ -22,6 +22,8 @@ All notable changes to this project are documented here. The format follows
 - Restored compatibility with the Rust 1.98 Clippy warning set used by CI,
   including signal-handler casts, PTY reader control flow, and action-panel
   rendering without changing runtime behavior.
+- Removed a port-reservation race between parallel Competitive Companion
+  integration tests that could make a receiver exit before the test connected.
 
 ## [0.15.0] - 2026-09-23
 
