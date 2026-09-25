@@ -1531,23 +1531,34 @@ fn draw_action_rail(
     layout.toolbar_row = u16::MAX;
     layout.toolbar_regions.clear();
     for row in start..end {
-        queue!(output, MoveTo(0, row))?;
-        if color {
-            queue!(output, SetForegroundColor(theme::MUTED))?;
-        }
         queue!(
             output,
-            SetAttribute(Attribute::Dim),
-            Print("│"),
-            Print(" ".repeat(width.saturating_sub(1) as usize)),
-            Print("│ "),
-            SetAttribute(Attribute::Reset),
-            ResetColor
+            MoveTo(0, row),
+            Print(" ".repeat(width.saturating_add(2) as usize))
         )?;
     }
 
-    draw_rail_group_header(output, width, start, "▶", "RUN", Some("SPLIT"), color)?;
-    draw_rail_rule(output, width, start + 1, color)?;
+    let run_top = start;
+    let run_bottom = start + 5;
+    draw_rail_box(
+        output,
+        width,
+        run_top,
+        run_bottom,
+        color,
+        theme::SECTION_RUN,
+    )?;
+    draw_rail_group_header(
+        output,
+        width,
+        run_top,
+        "▶",
+        "RUN",
+        Some("SPLIT"),
+        color,
+        theme::SECTION_RUN,
+    )?;
+    draw_rail_box_divider(output, width, run_top + 1, color, theme::SECTION_RUN)?;
     draw_rail_action(
         output,
         width,
@@ -1556,7 +1567,7 @@ fn draw_action_rail(
         "[Int]",
         EditorAction::RunInteractive,
         color,
-        theme::PRIMARY,
+        theme::SECTION_RUN,
         layout,
     )?;
     draw_rail_action(
@@ -1567,7 +1578,7 @@ fn draw_action_rail(
         "[Clip]",
         EditorAction::RunClipboard,
         color,
-        theme::PRIMARY,
+        theme::SECTION_RUN,
         layout,
     )?;
     draw_rail_action(
@@ -1586,34 +1597,67 @@ fn draw_action_rail(
         layout,
     )?;
 
-    draw_rail_rule(output, width, start + 6, color)?;
+    let session_top = end.saturating_sub(6);
+    let cases_top = start + 7;
+    let cases_bottom = session_top.saturating_sub(2);
+    draw_rail_box(
+        output,
+        width,
+        cases_top,
+        cases_bottom,
+        color,
+        theme::SECTION_CASES,
+    )?;
     draw_rail_cases_header(
         output,
         width,
-        start + 7,
+        cases_top,
         options.case_ids.len(),
         color,
+        theme::SECTION_CASES,
         layout,
     )?;
-    draw_rail_rule(output, width, start + 8, color)?;
-    let session_row = end.saturating_sub(5);
+    draw_rail_box_divider(output, width, cases_top + 1, color, theme::SECTION_CASES)?;
     draw_rail_case_grid(
         output,
         width,
-        start + 9,
-        session_row.saturating_sub(1),
+        cases_top + 2,
+        cases_bottom,
         options.case_ids,
         color,
+        theme::SECTION_CASES,
         layout,
     )?;
 
-    draw_rail_rule(output, width, session_row.saturating_sub(1), color)?;
-    draw_rail_group_header(output, width, session_row, "⚙", "SESSION", None, color)?;
-    draw_rail_rule(output, width, session_row + 1, color)?;
+    draw_rail_box(
+        output,
+        width,
+        session_top,
+        end - 1,
+        color,
+        theme::SECTION_SESSION,
+    )?;
+    draw_rail_group_header(
+        output,
+        width,
+        session_top,
+        "⚙",
+        "SESSION",
+        None,
+        color,
+        theme::SECTION_SESSION,
+    )?;
+    draw_rail_box_divider(
+        output,
+        width,
+        session_top + 1,
+        color,
+        theme::SECTION_SESSION,
+    )?;
     draw_rail_action(
         output,
         width,
-        session_row + 2,
+        session_top + 2,
         "⚙",
         if options.debug { "[On]" } else { "[Off]" },
         EditorAction::ToggleDebug,
@@ -1628,32 +1672,29 @@ fn draw_action_rail(
     draw_rail_action(
         output,
         width,
-        session_row + 3,
+        session_top + 3,
         "▤",
         "[Select]",
         EditorAction::SelectText,
         color,
-        if options.selection_mode {
-            theme::PRIMARY_SOFT
-        } else {
-            theme::SURFACE
-        },
+        theme::SECTION_SESSION,
         layout,
     )?;
     draw_rail_action(
         output,
         width,
-        session_row + 4,
+        session_top + 4,
         "•••",
         "[More]",
         EditorAction::More,
         color,
-        theme::PRIMARY,
+        theme::SECTION_SESSION,
         layout,
     )?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_rail_group_header(
     output: &mut impl Write,
     width: u16,
@@ -1662,23 +1703,27 @@ fn draw_rail_group_header(
     title: &str,
     meta: Option<&str>,
     color: bool,
+    accent: Color,
 ) -> AppResult<()> {
-    queue!(output, MoveTo(3, row))?;
+    queue!(output, MoveTo(2, row), Print(" "))?;
     if color {
-        queue!(output, SetForegroundColor(theme::PRIMARY))?;
+        queue!(output, SetForegroundColor(accent))?;
     }
     queue!(
         output,
         SetAttribute(Attribute::Bold),
         Print(icon),
-        MoveTo(7, row),
+        Print("  "),
         Print(title),
+        Print(" "),
         SetAttribute(Attribute::Reset),
         ResetColor
     )?;
     if let Some(meta) = meta {
-        let column = width.saturating_sub(UnicodeWidthStr::width(meta) as u16 + 2);
+        let column = width.saturating_sub(UnicodeWidthStr::width(meta) as u16 + 3);
+        queue!(output, MoveTo(column.saturating_sub(1), row), Print(" "))?;
         draw_rail_muted(output, column, row, meta, color)?;
+        queue!(output, Print(" "))?;
     }
     Ok(())
 }
@@ -1689,13 +1734,19 @@ fn draw_rail_cases_header(
     row: u16,
     case_count: usize,
     color: bool,
+    accent: Color,
     layout: &mut Layout,
 ) -> AppResult<()> {
-    draw_rail_group_header(output, width, row, "▤", "CASES", None, color)?;
+    draw_rail_group_header(output, width, row, "▤", "CASES", None, color, accent)?;
     let mut column = 15_u16;
-    queue!(output, MoveTo(column, row))?;
+    queue!(
+        output,
+        MoveTo(column - 1, row),
+        Print(" "),
+        MoveTo(column, row)
+    )?;
     let add_start = column;
-    draw_toolbar_button(output, "[+Case]", color, theme::PRIMARY)?;
+    draw_rail_button(output, "[+Case]", color, accent, true)?;
     column += UnicodeWidthStr::width("[+Case]") as u16;
     layout.toolbar_regions.push(ToolbarRegion {
         row,
@@ -1703,11 +1754,13 @@ fn draw_rail_cases_header(
         end: column,
         action: EditorAction::AddCase,
     });
+    queue!(output, Print("  "))?;
     column += 2;
     queue!(output, MoveTo(column, row))?;
     let all_start = column;
-    draw_toolbar_button(output, "[All]", color, theme::PRIMARY_SOFT)?;
+    draw_rail_button(output, "[All]", color, accent, false)?;
     column += UnicodeWidthStr::width("[All]") as u16;
+    queue!(output, Print(" "))?;
     layout.toolbar_regions.push(ToolbarRegion {
         row,
         start: all_start,
@@ -1720,9 +1773,15 @@ fn draw_rail_cases_header(
     } else {
         format!("{case_count} cases")
     };
-    let meta_column = width.saturating_sub(UnicodeWidthStr::width(meta.as_str()) as u16 + 2);
+    let meta_column = width.saturating_sub(UnicodeWidthStr::width(meta.as_str()) as u16 + 3);
     if meta_column > column + 1 {
+        queue!(
+            output,
+            MoveTo(meta_column.saturating_sub(1), row),
+            Print(" ")
+        )?;
         draw_rail_muted(output, meta_column, row, &meta, color)?;
+        queue!(output, Print(" "))?;
     }
     Ok(())
 }
@@ -1748,15 +1807,68 @@ fn draw_rail_muted(
     Ok(())
 }
 
-fn draw_rail_rule(output: &mut impl Write, width: u16, row: u16, color: bool) -> AppResult<()> {
-    queue!(output, MoveTo(2, row))?;
+fn draw_rail_box(
+    output: &mut impl Write,
+    width: u16,
+    top: u16,
+    bottom: u16,
+    color: bool,
+    accent: Color,
+) -> AppResult<()> {
+    if bottom <= top {
+        return Ok(());
+    }
     if color {
-        queue!(output, SetForegroundColor(theme::MUTED))?;
+        queue!(output, SetForegroundColor(accent))?;
+    } else {
+        queue!(output, SetAttribute(Attribute::Dim))?;
+    }
+    let left = 1_u16;
+    let right = width.saturating_sub(1);
+    queue!(
+        output,
+        MoveTo(left, top),
+        Print("╭"),
+        Print("─".repeat(right.saturating_sub(left + 1) as usize)),
+        Print("╮"),
+        MoveTo(left, bottom),
+        Print("╰"),
+        Print("─".repeat(right.saturating_sub(left + 1) as usize)),
+        Print("╯")
+    )?;
+    for row in top + 1..bottom {
+        queue!(
+            output,
+            MoveTo(left, row),
+            Print("│"),
+            MoveTo(right, row),
+            Print("│")
+        )?;
+    }
+    queue!(output, SetAttribute(Attribute::Reset), ResetColor)?;
+    Ok(())
+}
+
+fn draw_rail_box_divider(
+    output: &mut impl Write,
+    width: u16,
+    row: u16,
+    color: bool,
+    accent: Color,
+) -> AppResult<()> {
+    let left = 1_u16;
+    let right = width.saturating_sub(1);
+    if color {
+        queue!(output, SetForegroundColor(accent))?;
+    } else {
+        queue!(output, SetAttribute(Attribute::Dim))?;
     }
     queue!(
         output,
-        SetAttribute(Attribute::Dim),
-        Print("─".repeat(width.saturating_sub(3) as usize)),
+        MoveTo(left, row),
+        Print("├"),
+        Print("─".repeat(right.saturating_sub(left + 1) as usize)),
+        Print("┤"),
         SetAttribute(Attribute::Reset),
         ResetColor
     )?;
@@ -1775,6 +1887,10 @@ fn draw_rail_action(
     tint: Color,
     layout: &mut Layout,
 ) -> AppResult<()> {
+    let strong = matches!(
+        action,
+        EditorAction::RunInteractive | EditorAction::More | EditorAction::ChooseCase
+    ) || tint == theme::SUCCESS;
     queue!(output, MoveTo(3, row))?;
     if color {
         queue!(
@@ -1788,13 +1904,17 @@ fn draw_rail_action(
     }
     queue!(
         output,
-        SetAttribute(Attribute::Bold),
+        SetAttribute(if strong {
+            Attribute::Bold
+        } else {
+            Attribute::Dim
+        }),
         Print(icon),
         SetAttribute(Attribute::Reset),
         ResetColor
     )?;
     queue!(output, MoveTo(8, row))?;
-    draw_toolbar_button(output, label, color, tint)?;
+    draw_rail_button(output, label, color, tint, strong)?;
     layout.toolbar_regions.push(ToolbarRegion {
         row,
         start: 0,
@@ -1804,6 +1924,35 @@ fn draw_rail_action(
     Ok(())
 }
 
+fn draw_rail_button(
+    output: &mut impl Write,
+    label: &str,
+    color: bool,
+    tint: Color,
+    strong: bool,
+) -> AppResult<()> {
+    let disabled = tint == theme::SURFACE;
+    if color {
+        queue!(
+            output,
+            SetForegroundColor(if disabled { theme::MUTED } else { tint })
+        )?;
+    }
+    if strong {
+        queue!(output, SetAttribute(Attribute::Bold))?;
+    } else if disabled {
+        queue!(output, SetAttribute(Attribute::Dim))?;
+    }
+    queue!(
+        output,
+        Print(label),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_rail_case_grid(
     output: &mut impl Write,
     width: u16,
@@ -1811,6 +1960,7 @@ fn draw_rail_case_grid(
     end: u16,
     case_ids: &[u64],
     color: bool,
+    accent: Color,
     layout: &mut Layout,
 ) -> AppResult<()> {
     let available_rows = end.saturating_sub(start) as usize;
@@ -1847,7 +1997,7 @@ fn draw_rail_case_grid(
         }
         queue!(output, MoveTo(column, row))?;
         let button_start = column;
-        draw_toolbar_button(output, label, color, theme::PRIMARY_SOFT)?;
+        draw_rail_button(output, label, color, accent, false)?;
         column += label_width;
         layout.toolbar_regions.push(ToolbarRegion {
             row,
@@ -1866,7 +2016,7 @@ fn draw_rail_case_grid(
             "[Cases]",
             EditorAction::ChooseCase,
             color,
-            theme::PRIMARY,
+            accent,
             layout,
         )?;
     }

@@ -51,7 +51,7 @@ const FINAL_OUTPUT_NOTICE: &[u8] = b"\n  ... final output ...\n";
 pub const WORKSPACE_HEADER_ROWS: u16 = 2;
 pub const WORKSPACE_MOUSE_FOOTER_ROWS: u16 = 4;
 pub const WORKSPACE_SPLIT_MIN_WIDTH: u16 = 88;
-pub const WORKSPACE_SPLIT_MIN_HEIGHT: u16 = 20;
+pub const WORKSPACE_SPLIT_MIN_HEIGHT: u16 = 24;
 
 pub fn split_workspace_active(requested: bool, width: u16, height: u16) -> bool {
     requested && width >= WORKSPACE_SPLIT_MIN_WIDTH && height >= WORKSPACE_SPLIT_MIN_HEIGHT

@@ -29,6 +29,11 @@ All notable changes to this project are documented here. The format follows
   and Session headers; removed action descriptions and the primary-action fill,
   compacted numbered case buttons with tighter spacing, added space before
   Cases, and moved All beside +Case above the numbered-case grid.
+- Separated the three split-rail groups into rounded panels with understated
+  blue, teal, and lavender accents and responsive spacing between panels.
+- Inset the split-rail panels to emphasize their rounded corners, added a
+  divider beneath every section title, and differentiated primary, secondary,
+  and unavailable controls through restrained font-weight changes.
 
 ## [0.15.1] - 2026-09-24
 

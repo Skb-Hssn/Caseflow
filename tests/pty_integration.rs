@@ -626,7 +626,7 @@ fn workspace_layout_menu_switches_between_classic_and_split_controls() {
 
     // More in the left rail can restore the original horizontal toolbar.
     let menu_offset = session.output_len();
-    session.send(b"\x1b[<0;2;22M");
+    session.send(b"\x1b[<0;2;21M");
     session.wait_for_sequence_since(menu_offset, &["More actions"]);
     let layout_offset = session.output_len();
     session.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
@@ -664,9 +664,9 @@ fn split_action_rail_wraps_cases_and_keeps_every_case_reachable() {
 
     // All sits beside +Case; numbered cases wrap below those header actions.
     session.wait_for_sequence_since(split_offset, &["CASES", "[+Case]", "[All]", "40 cases"]);
-    session.wait_for("[20]");
+    session.wait_for("[12]");
     session.wait_for("[Cases]");
-    session.send(b"\x1b[<0;2;16M");
+    session.send(b"\x1b[<0;2;14M");
     session.wait_for("Run saved case");
 
     // End selects the final item in the complete, scrollable case list.

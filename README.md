@@ -394,11 +394,14 @@ Run, add-case, and More actions use the primary blue accent; active debug mode
 is green; numbered tests and unavailable controls use muted slate; and `[All]`
 uses the main text color. In classic mode, subtle vertical dividers and
 flexible spacing separate the Run, Test, Debug, selection, and More groups. In
-split mode, a bordered icon-led rail groups the same actions under Run, Cases,
-and Session headings using compact labels without descriptions. `[+Case]` and
-`[All]` share the Cases header; compact numbered buttons such as `[1]` wrap
-across as many rows as the terminal provides instead of being dropped after
-the first line. Only the output viewport scrolls.
+split mode, the icon-led rail separates Run, Cases, and Session into rounded
+panels with distinct soft blue, teal, and lavender accents. Controls use
+compact labels without descriptions. Each inset panel has a title divider;
+bold primary actions, regular secondary actions, and dim unavailable actions
+create a visible control hierarchy. `[+Case]` and `[All]` share the Cases
+header; compact numbered buttons such as `[1]` wrap across as many rows as the
+terminal provides instead of being dropped after the first line. Only the
+output viewport scrolls.
 
 `[Again]` remains neutral until a repeatable command exists. `[More]` opens a
 bordered panel on the right side of the output viewport. Its actions are
