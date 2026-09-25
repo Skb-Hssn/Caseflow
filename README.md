@@ -17,8 +17,8 @@ artifacts outside the solution directory.
 
 - Full-screen REPL with a fixed header, scrollable output, command history,
   fuzzy source selection, and context-aware suggestions.
-- Optional mouse toolbar for interactive runs, clipboard runs, saved tests,
-  debug mode, scrolling, and native text selection.
+- Switchable classic-toolbar and split-column controls for interactive runs,
+  clipboard runs, saved tests, debug mode, scrolling, and text selection.
 - Script-friendly commands with clean stdout, diagnostics on stderr, and
   meaningful exit statuses.
 - Saved cases using the familiar `<stem>.in<ID>` convention.
@@ -259,9 +259,18 @@ run-cli --debug A.cpp
 The workspace uses the terminal's alternate screen, like Vim. A single fixed
 header shows `Caseflow`, its version, and the active source on the left, with
 the language, build mode, and mouse state aligned on the right. Program output
-and diagnostics occupy a scrollable middle viewport. Framing rules, the action
-bar, and the `caseflow:SOURCE ›` command prompt stay fixed at the bottom.
-`/exit` or Ctrl-D restores the previous terminal contents.
+and diagnostics occupy a scrollable viewport. The `caseflow:SOURCE ›` command
+prompt and action controls remain fixed. `/exit` or Ctrl-D restores the
+previous terminal contents.
+
+Use **More → Workspace layout** to switch between two styles:
+
+- **Classic toolbar** keeps the compact horizontal action bar below output.
+- **Split columns** keeps an action rail on the left while output scrolls in
+  the right pane. Live program output is confined to that right pane as well.
+
+Split columns automatically falls back to the classic toolbar when the
+terminal is too narrow or short, then returns when enough space is available.
 
 Terminal state is also restored after handled errors, panics, and termination
 signals.
@@ -369,7 +378,7 @@ mouse = false
 user or project configuration has disabled mouse controls. Inside a running
 session, `/mouse on`, `/mouse off`, and `/mouse toggle` take effect immediately.
 
-The fixed toolbar exposes the following compact controls:
+Both the classic toolbar and split action rail expose the same controls:
 
 - **Run `[Int]`** starts an interactive run.
 - **Run `[Clip]`** appends clipboard input as a case and runs it.
@@ -383,25 +392,30 @@ The fixed toolbar exposes the following compact controls:
 Controls are rendered as bracketed terminal text rather than filled buttons.
 Run, add-case, and More actions use the primary blue accent; active debug mode
 is green; numbered tests and unavailable controls use muted slate; and `[All]`
-uses the main text color. On wide terminals, subtle vertical dividers and
-flexible spacing separate the Run, Test, Debug, selection, and More groups.
-Only the output viewport scrolls.
+uses the main text color. In classic mode, subtle vertical dividers and
+flexible spacing separate the Run, Test, Debug, selection, and More groups. In
+split mode, a bordered icon-led rail groups the same actions under Run, Cases,
+and Session headings using compact labels without descriptions. `[+Case]` and
+`[All]` share the Cases header; compact numbered buttons such as `[1]` wrap
+across as many rows as the terminal provides instead of being dropped after
+the first line. Only the output viewport scrolls.
 
 `[Again]` remains neutral until a repeatable command exists. `[More]` opens a
 bordered panel on the right side of the output viewport. Its actions are
 ordered around common tasks: source switching, editing the active file or a
 saved case, output and session utilities, Companion imports, deletion,
-diagnostics, help, and exit. It also exposes Session status and Check tools
-without adding permanent toolbar buttons. Choose with the mouse or with
-Up/Down and Enter; Esc closes the panel. Edit case and Delete case open a
+diagnostics, help, and exit. It also exposes Workspace layout, Session status,
+and Check tools without adding permanent toolbar buttons. Choose with the mouse
+or with Up/Down and Enter; Esc closes the panel. Edit case and Delete case open a
 second saved-case picker, and deletion still requires confirmation.
 
 The toolbar becomes more compact on narrow terminals: `[Again]`, `[+Case]`,
 and `[More]` become `[R]`, `[+]`, and `[…]`, then single-character controls at
-the narrowest supported width. Numbered tests that do not fit are represented
-by an ellipsis while `[All]` remains available. Mouse reporting is enabled only
-while Caseflow owns the workspace and is disabled while a child program or
-external editor owns the terminal.
+the narrowest supported width. When numbered tests exceed the available space,
+`[…]` in the classic toolbar or `[Cases]` in the split rail opens a scrollable
+picker containing every saved case and an All cases action. Mouse reporting is
+enabled only while Caseflow owns the workspace and is disabled while a child
+program or external editor owns the terminal.
 
 Choose **Select**, drag over visible text, and copy with your terminal's normal
 shortcut, commonly Ctrl-Shift-C. The wheel, arrow keys, Page Up/Down, Home, and

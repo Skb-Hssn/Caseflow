@@ -2,7 +2,7 @@ use crate::cases;
 use crate::cli::Cli;
 use crate::commands::{self, GlobalOptions};
 use crate::config::Config;
-use crate::editor::{EditorAction, EditorSignal, LineEditor};
+use crate::editor::{EditorAction, EditorSignal, LineEditor, WorkspaceStyle};
 use crate::error::{AppError, AppResult};
 use crate::model::{BuildMode, SourceSpec};
 use crate::source::{resolve_source, scan_sources};
@@ -18,6 +18,7 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
         source,
         mode: base_globals.mode.unwrap_or(config.default_mode),
         mouse: config.mouse,
+        workspace_style: WorkspaceStyle::Classic,
         config,
         ui,
         base_globals,
@@ -34,6 +35,7 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
     let mut last_repeatable: Option<String> = None;
 
     loop {
+        editor.set_workspace_style(session.workspace_style);
         editor.set_context(
             session.source.path.display().to_string(),
             session.source.language.to_string(),
@@ -114,9 +116,28 @@ pub fn start(source: SourceSpec, base_globals: GlobalOptions) -> AppResult<i32> 
                             editor.clear_output();
                             continue;
                         }
+                        Some(MoreAction::WorkspaceStyle(style)) => {
+                            session.workspace_style = style;
+                            editor.set_workspace_style(style);
+                            editor.append_output(
+                                format!("Workspace layout: {}\n", style.label()).as_bytes(),
+                            );
+                            continue;
+                        }
                         Some(MoreAction::Message(message)) => {
                             editor.append_output(message.as_bytes());
                             continue;
+                        }
+                        None => continue,
+                    },
+                    EditorAction::ChooseCase => match select_test_action(&session)? {
+                        Some(MoreAction::Command(command)) => command,
+                        Some(MoreAction::Message(message)) => {
+                            editor.append_output(message.as_bytes());
+                            continue;
+                        }
+                        Some(MoreAction::ClearOutput | MoreAction::WorkspaceStyle(_)) => {
+                            unreachable!("case picker returned an unrelated action")
                         }
                         None => continue,
                     },
@@ -157,8 +178,10 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
         editor.append_output(format!("! {warning}\n").as_bytes());
     }
     let mouse = config.mouse;
+    let mut workspace_style = WorkspaceStyle::Classic;
     let mode = base_globals.mode.unwrap_or(config.default_mode).to_string();
     loop {
+        editor.set_workspace_style(workspace_style);
         editor.set_context("[no source]", "contest download", &mode, mouse);
         editor.set_case_ids(Vec::new());
         editor.set_repeat_available(false);
@@ -168,6 +191,10 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
                 const ITEMS: &[(&str, &str)] = &[
                     ("Download contest here", "receive a complete contest batch"),
                     ("Clear output", "clear retained workspace output"),
+                    (
+                        "Workspace layout",
+                        "choose classic toolbar or split columns",
+                    ),
                     ("Help", "show source-less session commands"),
                     ("Exit", "leave Caseflow and restore the terminal"),
                 ];
@@ -177,8 +204,18 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
                         editor.clear_output();
                         continue;
                     }
-                    Some(2) => "/help".to_string(),
-                    Some(3) => "/exit".to_string(),
+                    Some(2) => {
+                        if let Some(style) = select_workspace_style(mouse, ui.color_enabled())? {
+                            workspace_style = style;
+                            editor.set_workspace_style(style);
+                            editor.append_output(
+                                format!("Workspace layout: {}\n", style.label()).as_bytes(),
+                            );
+                        }
+                        continue;
+                    }
+                    Some(3) => "/help".to_string(),
+                    Some(4) => "/exit".to_string(),
                     _ => continue,
                 }
             }
@@ -252,8 +289,9 @@ pub fn start_empty(base_globals: GlobalOptions) -> AppResult<i32> {
             }
         };
         editor.begin_command(&line);
-        terminal::begin_workspace_output(mouse)?;
-        let captured = terminal::capture_output(mouse, || {
+        let split = workspace_style == WorkspaceStyle::Split;
+        terminal::begin_workspace_output(mouse, split)?;
+        let captured = terminal::capture_output(mouse, split, || {
             commands::download_contest(&directory, port, wait, base_globals)
         });
         let restore = terminal::end_workspace_output();
@@ -325,6 +363,7 @@ struct Session {
     source: SourceSpec,
     mode: BuildMode,
     mouse: bool,
+    workspace_style: WorkspaceStyle,
     config: Config,
     ui: Ui,
     base_globals: GlobalOptions,
@@ -344,14 +383,16 @@ fn submit(
     command: &str,
 ) -> AppResult<SessionAction> {
     editor.begin_command(command);
-    terminal::begin_workspace_output(session.mouse)?;
-    let captured = terminal::capture_output(session.mouse, || match session.handle(command) {
-        Ok(action) => action,
-        Err(error) => {
-            session.ui.error(error.message);
-            SessionAction::Continue
-        }
-    });
+    let split = session.workspace_style == WorkspaceStyle::Split;
+    terminal::begin_workspace_output(session.mouse, split)?;
+    let captured =
+        terminal::capture_output(session.mouse, split, || match session.handle(command) {
+            Ok(action) => action,
+            Err(error) => {
+                session.ui.error(error.message);
+                SessionAction::Continue
+            }
+        });
     let restore = terminal::end_workspace_output();
     let (action, captured) = captured?;
     restore?;
@@ -409,6 +450,7 @@ fn is_repeatable(line: &str) -> bool {
 enum MoreAction {
     Command(String),
     ClearOutput,
+    WorkspaceStyle(WorkspaceStyle),
     Message(String),
 }
 
@@ -418,6 +460,10 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
         ("Edit file", "edit the active source file"),
         ("Edit case", "edit a saved input in the external editor"),
         ("Clear output", "clear retained workspace output"),
+        (
+            "Workspace layout",
+            "choose classic toolbar or split action rail",
+        ),
         (
             "Session status",
             "show source, mode, cases, mouse, and cache",
@@ -449,16 +495,42 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
         )),
         2 => return select_case_action(session, "Edit saved case", "/case edit"),
         3 => MoreAction::ClearOutput,
-        4 => MoreAction::Command("/status".to_string()),
-        5 => MoreAction::Command("/companion".to_string()),
-        6 => MoreAction::Command("/contest".to_string()),
-        7 => return select_case_action(session, "Delete saved case", "/case delete"),
-        8 => MoreAction::Command("/doctor".to_string()),
-        9 => MoreAction::Command("/help".to_string()),
-        10 => MoreAction::Command("/exit".to_string()),
+        4 => match select_workspace_style(session.mouse, session.ui.color_enabled())? {
+            Some(style) => MoreAction::WorkspaceStyle(style),
+            None => return Ok(None),
+        },
+        5 => MoreAction::Command("/status".to_string()),
+        6 => MoreAction::Command("/companion".to_string()),
+        7 => MoreAction::Command("/contest".to_string()),
+        8 => return select_case_action(session, "Delete saved case", "/case delete"),
+        9 => MoreAction::Command("/doctor".to_string()),
+        10 => MoreAction::Command("/help".to_string()),
+        11 => MoreAction::Command("/exit".to_string()),
         _ => return Ok(None),
     };
     Ok(Some(action))
+}
+
+fn select_workspace_style(mouse: bool, color: bool) -> AppResult<Option<WorkspaceStyle>> {
+    const ITEMS: &[(&str, &str)] = &[
+        (
+            "Classic toolbar",
+            "fixed horizontal controls below the output",
+        ),
+        (
+            "Split columns",
+            "fixed action rail beside scrollable output",
+        ),
+    ];
+    Ok(
+        terminal::select_menu("Workspace layout", ITEMS, mouse, color)?.map(|selected| {
+            if selected == 1 {
+                WorkspaceStyle::Split
+            } else {
+                WorkspaceStyle::Classic
+            }
+        }),
+    )
 }
 
 fn select_case_action(
@@ -487,6 +559,37 @@ fn select_case_action(
         .collect::<Vec<_>>();
     let selected = terminal::select_menu(title, &items, session.mouse, session.ui.color_enabled())?;
     Ok(selected.map(|index| MoreAction::Command(format!("{command} {}", saved[index].id))))
+}
+
+fn select_test_action(session: &Session) -> AppResult<Option<MoreAction>> {
+    let saved = cases::list(&session.source)?;
+    if saved.is_empty() {
+        return Ok(Some(MoreAction::Message(
+            "✗ Error  no saved cases are available\n".to_string(),
+        )));
+    }
+    let mut labels = vec!["All cases".to_string()];
+    labels.extend(saved.iter().map(|case| format!("Case #{}", case.id)));
+    let mut descriptions = vec!["run every saved input".to_string()];
+    descriptions.extend(saved.iter().map(|case| case.path.display().to_string()));
+    let items = labels
+        .iter()
+        .zip(&descriptions)
+        .map(|(label, description)| (label.as_str(), description.as_str()))
+        .collect::<Vec<_>>();
+    let selected = terminal::select_menu(
+        "Run saved case",
+        &items,
+        session.mouse,
+        session.ui.color_enabled(),
+    )?;
+    Ok(selected.map(|index| {
+        if index == 0 {
+            MoreAction::Command("/test all".to_string())
+        } else {
+            MoreAction::Command(format!("/test {}", saved[index - 1].id))
+        }
+    }))
 }
 
 impl Session {

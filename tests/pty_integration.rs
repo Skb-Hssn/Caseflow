@@ -597,6 +597,90 @@ fn persistent_mouse_toolbar_runs_the_active_source() {
 }
 
 #[test]
+fn workspace_layout_menu_switches_between_classic_and_split_controls() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('split-run')\n");
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[More]");
+
+    // More → Workspace layout → Split columns.
+    session.send(b"\x1b[<0;75;23M");
+    session.wait_for("More actions");
+    session.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
+    session.wait_for("Workspace layout");
+    session.send(b"\x1b[B\r");
+    session.wait_for("Workspace layout: Split columns");
+    session.wait_for("SPLIT");
+
+    // The left rail remains actionable while output occupies the right pane.
+    let run_offset = session.output_len();
+    session.send(b"\x1b[<0;2;5M");
+    session.wait_for("split-run");
+    session.wait_for("Success (exit 0)");
+    assert!(
+        session
+            .text_since(run_offset)
+            .contains("\x1b[?69h\x1b[45;100s\x1b[3;22r"),
+        "live output must be confined to the split layout's right pane"
+    );
+
+    // More in the left rail can restore the original horizontal toolbar.
+    let menu_offset = session.output_len();
+    session.send(b"\x1b[<0;2;22M");
+    session.wait_for_sequence_since(menu_offset, &["More actions"]);
+    let layout_offset = session.output_len();
+    session.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
+    session.wait_for_sequence_since(layout_offset, &["Workspace layout"]);
+    let classic_offset = session.output_len();
+    session.send(b"\r");
+    session.wait_for_sequence_since(
+        classic_offset,
+        &["Workspace layout: Classic toolbar", "[Int]"],
+    );
+
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
+fn split_action_rail_wraps_cases_and_keeps_every_case_reachable() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print(input().strip())\n");
+    for id in 1..=40 {
+        fs::write(
+            directory.path().join(format!("main.in{id}")),
+            format!("case-{id}\n"),
+        )
+        .unwrap();
+    }
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[More]");
+    session.send(b"\x1b[<0;95;23M");
+    session.wait_for("More actions");
+    session.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
+    session.wait_for("Workspace layout");
+    let split_offset = session.output_len();
+    session.send(b"\x1b[B\r");
+
+    // All sits beside +Case; numbered cases wrap below those header actions.
+    session.wait_for_sequence_since(split_offset, &["CASES", "[+Case]", "[All]", "40 cases"]);
+    session.wait_for("[20]");
+    session.wait_for("[Cases]");
+    session.send(b"\x1b[<0;2;16M");
+    session.wait_for("Run saved case");
+
+    // End selects the final item in the complete, scrollable case list.
+    let run_offset = session.output_len();
+    session.send(b"\x1b[F\r");
+    session.wait_for_sequence_since(
+        run_offset,
+        &["› /test 40", "main.in40", "case-40", "caseflow:main.py"],
+    );
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn mouse_toolbar_again_repeats_the_latest_run() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print('toolbar-again')\n");
@@ -820,9 +904,10 @@ fn mouse_wheel_scrolls_only_the_output_viewport() {
     );
     let session = PtySession::spawn(repl_command(&directory, &source, true));
     session.wait_for("[Int]");
+    let prompt_count = session.text().matches("caseflow:main.py").count();
     session.send(b"/run\r");
     session.wait_for("Success (exit 0)");
-    session.wait_for("caseflow:main.py");
+    session.wait_for_count("caseflow:main.py", prompt_count + 1);
     let before = session.text();
     assert!(
         before.contains("\x1b[3;20r"),

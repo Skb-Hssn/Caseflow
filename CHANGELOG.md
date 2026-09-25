@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-09-25
+
+### Added
+
+- Added a two-column workspace style with an elegant fixed action rail on the
+  left and an independently scrollable output viewport on the right.
+- Added a Workspace layout entry to More actions for switching between the
+  classic horizontal toolbar and split columns during a session.
+- Added a complete saved-case picker when the action rail or classic toolbar
+  cannot display every numbered test button directly.
+
+### Changed
+
+- Confined live child-process wrapping and scrolling to the right output pane
+  in split mode, keeping the action rail static throughout a run.
+- Made the split layout responsive: terminals below its usable width or height
+  automatically render the classic toolbar without changing the chosen style.
+- Refined the split action rail with aligned labels, stronger section hierarchy,
+  case counts, and a multi-row case grid that uses all available vertical room.
+- Restyled the split rail with a wider bordered layout, icon-led Run, Cases,
+  and Session headers; removed action descriptions and the primary-action fill,
+  compacted numbered case buttons with tighter spacing, added space before
+  Cases, and moved All beside +Case above the numbered-case grid.
+
 ## [0.15.1] - 2026-09-24
 
 ### Changed

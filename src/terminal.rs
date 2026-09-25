@@ -50,6 +50,16 @@ const OUTPUT_SUPPRESSED_NOTICE: &[u8] =
 const FINAL_OUTPUT_NOTICE: &[u8] = b"\n  ... final output ...\n";
 pub const WORKSPACE_HEADER_ROWS: u16 = 2;
 pub const WORKSPACE_MOUSE_FOOTER_ROWS: u16 = 4;
+pub const WORKSPACE_SPLIT_MIN_WIDTH: u16 = 88;
+pub const WORKSPACE_SPLIT_MIN_HEIGHT: u16 = 20;
+
+pub fn split_workspace_active(requested: bool, width: u16, height: u16) -> bool {
+    requested && width >= WORKSPACE_SPLIT_MIN_WIDTH && height >= WORKSPACE_SPLIT_MIN_HEIGHT
+}
+
+pub fn workspace_rail_width(width: u16) -> u16 {
+    (width.saturating_mul(42) / 100).clamp(40, 56)
+}
 
 impl TerminalGuard {
     fn enter(mouse: bool) -> AppResult<Self> {
@@ -129,6 +139,7 @@ pub fn restore_terminal() {
     let mut stderr = io::stderr();
     let _ = execute!(
         stderr,
+        Print("\x1b[r\x1b[?69l"),
         Print(DISABLE_MOUSE_TRACKING),
         Show,
         SetAttribute(Attribute::Reset)
@@ -182,9 +193,12 @@ pub fn record_interactive_input(input: &[u8]) {
     }
 }
 
-pub fn begin_workspace_output(mouse: bool) -> AppResult<()> {
+pub fn begin_workspace_output(mouse: bool, split: bool) -> AppResult<()> {
     let (width, height) = terminal::size().unwrap_or((80, 24));
-    let footer_rows = if mouse && height >= 6 && width >= 8 {
+    let split = split_workspace_active(split, width, height);
+    let footer_rows = if split {
+        2
+    } else if mouse && height >= 6 && width >= 8 {
         WORKSPACE_MOUSE_FOOTER_ROWS
     } else {
         1
@@ -193,18 +207,34 @@ pub fn begin_workspace_output(mouse: bool) -> AppResult<()> {
         WORKSPACE_HEADER_ROWS.min(height.saturating_sub(footer_rows).saturating_sub(1));
     let top = header_rows.saturating_add(1);
     let bottom = height.saturating_sub(footer_rows).max(top).min(height);
-    execute!(
-        io::stderr(),
-        Print(format!("\x1b[{top};{bottom}r")),
-        MoveTo(0, bottom.saturating_sub(1)),
-        Clear(ClearType::CurrentLine),
-        Show
-    )?;
+    if split {
+        let rail_width = workspace_rail_width(width);
+        let content_x = rail_width.saturating_add(2);
+        let left = content_x.saturating_add(1);
+        execute!(
+            io::stderr(),
+            // DECLRMM + DECSLRM confines wrapping and scrolling to the right
+            // pane while the action rail remains untouched on the left.
+            Print(format!("\x1b[?69h\x1b[{left};{width}s\x1b[{top};{bottom}r")),
+            MoveTo(content_x, bottom.saturating_sub(1)),
+            Print(" ".repeat(width.saturating_sub(content_x) as usize)),
+            MoveTo(content_x, bottom.saturating_sub(1)),
+            Show
+        )?;
+    } else {
+        execute!(
+            io::stderr(),
+            Print(format!("\x1b[{top};{bottom}r")),
+            MoveTo(0, bottom.saturating_sub(1)),
+            Clear(ClearType::CurrentLine),
+            Show
+        )?;
+    }
     Ok(())
 }
 
 pub fn end_workspace_output() -> AppResult<()> {
-    execute!(io::stderr(), Print("\x1b[r"))?;
+    execute!(io::stderr(), Print("\x1b[r\x1b[?69l"))?;
     Ok(())
 }
 
@@ -215,6 +245,7 @@ pub struct CapturedOutput {
 
 pub fn capture_output<T>(
     mouse: bool,
+    split: bool,
     action: impl FnOnce() -> T,
 ) -> AppResult<(T, CapturedOutput)> {
     let _capture_state = CaptureStateGuard::enter(io::stderr().is_terminal());
@@ -249,7 +280,9 @@ pub fn capture_output<T>(
     let redirect = OutputRedirect::install(pipe_fds[1], saved_stdout, saved_stderr)?;
     let reader_fd = pipe_fds[0];
     let (width, height) = terminal::size().unwrap_or((80, 24));
-    let footer_rows = if mouse && height >= 6 && width >= 8 {
+    let footer_rows = if split_workspace_active(split, width, height) {
+        2
+    } else if mouse && height >= 6 && width >= 8 {
         WORKSPACE_MOUSE_FOOTER_ROWS
     } else {
         1
@@ -620,11 +653,14 @@ pub fn select_menu(
                         // Preserve those broad row hit targets outside the new
                         // panel while the panel itself uses the current order.
                         if mouse_event.column < layout.start_column
-                            && items.len() == 11
+                            && items.len() == 12
                             && items.first().is_some_and(|item| item.0 == "Open source")
                             && chosen >= 1
                         {
                             chosen += 1;
+                            if chosen >= 4 {
+                                chosen += 1;
+                            }
                         }
                         chosen = chosen.min(items.len() - 1);
                         clear_action_menu(layout)?;

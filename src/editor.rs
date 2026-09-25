@@ -25,6 +25,22 @@ pub enum EditorSignal {
     CtrlD,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WorkspaceStyle {
+    #[default]
+    Classic,
+    Split,
+}
+
+impl WorkspaceStyle {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Classic => "Classic toolbar",
+            Self::Split => "Split columns",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EditorAction {
     RunInteractive,
@@ -34,6 +50,7 @@ pub enum EditorAction {
     ToggleDebug,
     SelectText,
     More,
+    ChooseCase,
     TestCase(u64),
     TestAll,
 }
@@ -49,6 +66,7 @@ pub struct LineEditor {
     output_lines: Vec<String>,
     scroll_offset: usize,
     warning: Option<String>,
+    workspace_style: WorkspaceStyle,
 }
 
 #[derive(Default)]
@@ -86,6 +104,7 @@ struct CompletionMenu {
 
 #[derive(Clone, Copy)]
 struct ToolbarRegion {
+    row: u16,
     start: u16,
     end: u16,
     action: EditorAction,
@@ -94,6 +113,8 @@ struct ToolbarRegion {
 #[derive(Default, Clone)]
 struct Layout {
     candidate_row: u16,
+    candidate_start: u16,
+    candidate_end: u16,
     visible_candidates: usize,
     button_row: u16,
     select_end: u16,
@@ -123,6 +144,7 @@ struct RenderOptions<'a> {
     context: &'a EditorContext,
     output_lines: &'a [String],
     scroll_offset: usize,
+    workspace_style: WorkspaceStyle,
 }
 
 struct ToolbarOptions<'a> {
@@ -164,6 +186,7 @@ impl LineEditor {
             output_lines: Vec::new(),
             scroll_offset: 0,
             warning,
+            workspace_style: WorkspaceStyle::default(),
         }
     }
 
@@ -177,6 +200,10 @@ impl LineEditor {
 
     pub fn set_color(&mut self, color: bool) {
         self.color = color;
+    }
+
+    pub fn set_workspace_style(&mut self, style: WorkspaceStyle) {
+        self.workspace_style = style;
     }
 
     pub fn set_case_ids(&mut self, case_ids: Vec<u64>) {
@@ -288,6 +315,7 @@ impl LineEditor {
                         context: &self.context,
                         output_lines: &self.output_lines,
                         scroll_offset: self.scroll_offset,
+                        workspace_style: self.workspace_style,
                     },
                     &mut render_state,
                 )?;
@@ -371,18 +399,16 @@ impl LineEditor {
                         // hit target. Besides being easier to click, this keeps
                         // controls usable in terminals that report border-row
                         // clicks one cell below the painted label.
-                        let action = (mouse_event.row == layout.toolbar_row
-                            || mouse_event.row == layout.toolbar_row.saturating_add(1))
-                        .then(|| {
-                            layout
-                                .toolbar_regions
-                                .iter()
-                                .find(|region| {
-                                    (region.start..region.end).contains(&mouse_event.column)
-                                })
-                                .map(|region| region.action)
-                        })
-                        .flatten();
+                        let action = layout
+                            .toolbar_regions
+                            .iter()
+                            .find(|region| {
+                                let toolbar_border = region.row == layout.toolbar_row
+                                    && mouse_event.row == region.row.saturating_add(1);
+                                (mouse_event.row == region.row || toolbar_border)
+                                    && (region.start..region.end).contains(&mouse_event.column)
+                            })
+                            .map(|region| region.action);
                         if let Some(action) = action {
                             if action == EditorAction::SelectText {
                                 terminal_state::enable_native_selection()?;
@@ -398,6 +424,8 @@ impl LineEditor {
                         } else if mouse_event.row >= layout.candidate_row
                             && mouse_event.row
                                 < layout.candidate_row + layout.visible_candidates as u16
+                            && (layout.candidate_start..layout.candidate_end)
+                                .contains(&mouse_event.column)
                         {
                             let visible = (mouse_event.row - layout.candidate_row) as usize;
                             if let Some(active) = menu.as_mut() {
@@ -407,7 +435,9 @@ impl LineEditor {
                                 redraw = true;
                             }
                         } else if mouse_event.row == layout.button_row {
-                            if mouse_event.column < layout.select_end {
+                            if mouse_event.column >= layout.candidate_start
+                                && mouse_event.column < layout.select_end
+                            {
                                 if let Some(active) = menu.as_mut() {
                                     apply_selected(&mut buffer, &mut cursor, active)?;
                                 }
@@ -692,10 +722,18 @@ fn render_workspace(
     let (width, height) = terminal::size().unwrap_or((80, 24));
     let width = width.max(1);
     let height = height.max(1);
-    // Keep the toolbar and prompt in a compact fixed footer so the output
-    // viewport has as much room as possible while controls stay stable.
-    let show_toolbar = options.show_toolbar && height >= 6 && width >= 8;
-    let footer_rows = if show_toolbar {
+    let split_layout = terminal_state::split_workspace_active(
+        options.workspace_style == WorkspaceStyle::Split,
+        width,
+        height,
+    );
+    // The split layout trades a little horizontal room for a permanent action
+    // rail. On smaller terminals it deliberately falls back to the classic
+    // footer rather than squeezing either pane past usability.
+    let show_toolbar = !split_layout && options.show_toolbar && height >= 6 && width >= 8;
+    let footer_rows = if split_layout {
+        2
+    } else if show_toolbar {
         terminal_state::WORKSPACE_MOUSE_FOOTER_ROWS
     } else {
         1
@@ -705,6 +743,17 @@ fn render_workspace(
     let prompt_row = height - 1;
     let content_start = header_rows;
     let content_end = height.saturating_sub(footer_rows).max(content_start);
+    let rail_width = if split_layout {
+        terminal_state::workspace_rail_width(width)
+    } else {
+        0
+    };
+    let content_x = if split_layout {
+        rail_width.saturating_add(2)
+    } else {
+        0
+    };
+    let content_width = width.saturating_sub(content_x).max(1);
     *anchor_row = prompt_row;
 
     let size_changed = state.frame_size != Some((width, height));
@@ -721,6 +770,7 @@ fn render_workspace(
         options.context.language.as_str(),
         options.context.mode.as_str(),
         options.context.mouse,
+        options.workspace_style,
     ));
     let menu_signature = menu.as_ref().map(|active| {
         let candidates = active
@@ -736,6 +786,7 @@ fn render_workspace(
         buffer,
         options.output_lines.len(),
         options.scroll_offset,
+        options.workspace_style,
         menu_signature,
     ));
 
@@ -755,7 +806,8 @@ fn render_workspace(
     if size_changed || state.content_signature != content_signature || menu.is_some() {
         draw_workspace_content(
             &mut stderr,
-            width,
+            content_x,
+            content_width,
             content_start,
             content_end,
             options.output_lines,
@@ -769,7 +821,33 @@ fn render_workspace(
         copy_toolbar(&mut layout, toolbar);
     }
 
-    if show_toolbar {
+    if split_layout {
+        let controls_changed = state.toolbar_dirty
+            || state.toolbar_size != Some((width, height))
+            || state.toolbar.is_none();
+        if controls_changed {
+            draw_action_rail(
+                &mut stderr,
+                rail_width,
+                content_start,
+                content_end,
+                options.color,
+                ToolbarOptions {
+                    case_ids: options.case_ids,
+                    repeat_available: options.repeat_available,
+                    debug: options.context.mode == "debug",
+                    selection_mode: options.selection_mode,
+                },
+                &mut layout,
+            )?;
+            draw_split_footer_rule(&mut stderr, width, prompt_row, options.color)?;
+            state.toolbar = Some(toolbar_only(&layout));
+            state.toolbar_size = Some((width, height));
+            state.toolbar_dirty = false;
+        } else if let Some(toolbar) = state.toolbar.as_ref() {
+            copy_toolbar(&mut layout, toolbar);
+        }
+    } else if show_toolbar {
         let toolbar_row = height - 3;
         let toolbar_changed = state.toolbar_dirty
             || state.toolbar_size != Some((width, height))
@@ -972,6 +1050,7 @@ fn draw_footer_rules(
 #[allow(clippy::too_many_arguments)]
 fn draw_workspace_content(
     output: &mut impl Write,
+    x: u16,
     width: u16,
     start: u16,
     end: u16,
@@ -1010,7 +1089,7 @@ fn draw_workspace_content(
 
     for index in 0..output_rows {
         let row = start + index as u16;
-        queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+        clear_pane_row(output, x, row, width)?;
         let line_index = line_start + index;
         if let Some(line) = output_lines.get(line_index) {
             draw_output_line(
@@ -1029,7 +1108,7 @@ fn draw_workspace_content(
         if label_width < width {
             queue!(
                 output,
-                MoveTo(width - label_width, start),
+                MoveTo(x + width - label_width, start),
                 SetAttribute(Attribute::Reverse),
                 Print(label),
                 SetAttribute(Attribute::Reset)
@@ -1047,7 +1126,7 @@ fn draw_workspace_content(
             active.offset = active.selected + 1 - visible_candidates;
         }
         let header_row = start + output_rows as u16;
-        queue!(output, MoveTo(0, header_row), Clear(ClearType::CurrentLine))?;
+        clear_pane_row(output, x, header_row, width)?;
         if color {
             queue!(
                 output,
@@ -1076,12 +1155,14 @@ fn draw_workspace_content(
             Clear(ClearType::UntilNewLine)
         )?;
         layout.candidate_row = header_row + 1;
+        layout.candidate_start = x;
+        layout.candidate_end = x.saturating_add(width);
         layout.visible_candidates = visible_candidates;
         for visible_index in 0..visible_candidates {
             let candidate_index = active.offset + visible_index;
             let candidate = &active.candidates[candidate_index];
             let row = layout.candidate_row + visible_index as u16;
-            queue!(output, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
+            clear_pane_row(output, x, row, width)?;
             let selected = candidate_index == active.selected;
             if active.dimmed {
                 queue!(output, SetAttribute(Attribute::Dim))?;
@@ -1125,11 +1206,7 @@ fn draw_workspace_content(
             )?;
         }
         layout.button_row = layout.candidate_row + visible_candidates as u16;
-        queue!(
-            output,
-            MoveTo(0, layout.button_row),
-            Clear(ClearType::CurrentLine)
-        )?;
+        clear_pane_row(output, x, layout.button_row, width)?;
         if active.dimmed {
             queue!(
                 output,
@@ -1141,18 +1218,28 @@ fn draw_workspace_content(
             draw_button(output, "Select", true)?;
             queue!(output, Print("  "))?;
             draw_button(output, "Close", false)?;
-            layout.select_end = 10;
-            layout.cancel_start = 12;
-            layout.cancel_end = 21;
+            layout.select_end = x + 10;
+            layout.cancel_start = x + 12;
+            layout.cancel_end = x + 21;
         } else {
             draw_compact_button(output, "OK", true)?;
             queue!(output, Print(" "))?;
             draw_compact_button(output, "X", false)?;
-            layout.select_end = 4;
-            layout.cancel_start = 5;
-            layout.cancel_end = 8;
+            layout.select_end = x + 4;
+            layout.cancel_start = x + 5;
+            layout.cancel_end = x + 8;
         }
     }
+    Ok(())
+}
+
+fn clear_pane_row(output: &mut impl Write, x: u16, row: u16, width: u16) -> AppResult<()> {
+    queue!(
+        output,
+        MoveTo(x, row),
+        Print(" ".repeat(width as usize)),
+        MoveTo(x, row)
+    )?;
     Ok(())
 }
 
@@ -1407,6 +1494,400 @@ fn draw_prompt(output: &mut impl Write, prompt: &str, color: bool) -> AppResult<
         ResetColor
     )?;
     Ok(())
+}
+
+fn draw_split_footer_rule(
+    output: &mut impl Write,
+    width: u16,
+    prompt_row: u16,
+    color: bool,
+) -> AppResult<()> {
+    if prompt_row == 0 {
+        return Ok(());
+    }
+    queue!(output, MoveTo(0, prompt_row - 1))?;
+    if color {
+        queue!(output, SetForegroundColor(theme::MUTED))?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Dim),
+        Print("─".repeat(width as usize)),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    Ok(())
+}
+
+fn draw_action_rail(
+    output: &mut impl Write,
+    width: u16,
+    start: u16,
+    end: u16,
+    color: bool,
+    options: ToolbarOptions<'_>,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    layout.toolbar_row = u16::MAX;
+    layout.toolbar_regions.clear();
+    for row in start..end {
+        queue!(output, MoveTo(0, row))?;
+        if color {
+            queue!(output, SetForegroundColor(theme::MUTED))?;
+        }
+        queue!(
+            output,
+            SetAttribute(Attribute::Dim),
+            Print("│"),
+            Print(" ".repeat(width.saturating_sub(1) as usize)),
+            Print("│ "),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
+    }
+
+    draw_rail_group_header(output, width, start, "▶", "RUN", Some("SPLIT"), color)?;
+    draw_rail_rule(output, width, start + 1, color)?;
+    draw_rail_action(
+        output,
+        width,
+        start + 2,
+        "▶",
+        "[Int]",
+        EditorAction::RunInteractive,
+        color,
+        theme::PRIMARY,
+        layout,
+    )?;
+    draw_rail_action(
+        output,
+        width,
+        start + 3,
+        "▣",
+        "[Clip]",
+        EditorAction::RunClipboard,
+        color,
+        theme::PRIMARY,
+        layout,
+    )?;
+    draw_rail_action(
+        output,
+        width,
+        start + 4,
+        "↻",
+        "[Again]",
+        EditorAction::RepeatLast,
+        color,
+        if options.repeat_available {
+            theme::PRIMARY
+        } else {
+            theme::SURFACE
+        },
+        layout,
+    )?;
+
+    draw_rail_rule(output, width, start + 6, color)?;
+    draw_rail_cases_header(
+        output,
+        width,
+        start + 7,
+        options.case_ids.len(),
+        color,
+        layout,
+    )?;
+    draw_rail_rule(output, width, start + 8, color)?;
+    let session_row = end.saturating_sub(5);
+    draw_rail_case_grid(
+        output,
+        width,
+        start + 9,
+        session_row.saturating_sub(1),
+        options.case_ids,
+        color,
+        layout,
+    )?;
+
+    draw_rail_rule(output, width, session_row.saturating_sub(1), color)?;
+    draw_rail_group_header(output, width, session_row, "⚙", "SESSION", None, color)?;
+    draw_rail_rule(output, width, session_row + 1, color)?;
+    draw_rail_action(
+        output,
+        width,
+        session_row + 2,
+        "⚙",
+        if options.debug { "[On]" } else { "[Off]" },
+        EditorAction::ToggleDebug,
+        color,
+        if options.debug {
+            theme::SUCCESS
+        } else {
+            theme::SURFACE
+        },
+        layout,
+    )?;
+    draw_rail_action(
+        output,
+        width,
+        session_row + 3,
+        "▤",
+        "[Select]",
+        EditorAction::SelectText,
+        color,
+        if options.selection_mode {
+            theme::PRIMARY_SOFT
+        } else {
+            theme::SURFACE
+        },
+        layout,
+    )?;
+    draw_rail_action(
+        output,
+        width,
+        session_row + 4,
+        "•••",
+        "[More]",
+        EditorAction::More,
+        color,
+        theme::PRIMARY,
+        layout,
+    )?;
+    Ok(())
+}
+
+fn draw_rail_group_header(
+    output: &mut impl Write,
+    width: u16,
+    row: u16,
+    icon: &str,
+    title: &str,
+    meta: Option<&str>,
+    color: bool,
+) -> AppResult<()> {
+    queue!(output, MoveTo(3, row))?;
+    if color {
+        queue!(output, SetForegroundColor(theme::PRIMARY))?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Bold),
+        Print(icon),
+        MoveTo(7, row),
+        Print(title),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    if let Some(meta) = meta {
+        let column = width.saturating_sub(UnicodeWidthStr::width(meta) as u16 + 2);
+        draw_rail_muted(output, column, row, meta, color)?;
+    }
+    Ok(())
+}
+
+fn draw_rail_cases_header(
+    output: &mut impl Write,
+    width: u16,
+    row: u16,
+    case_count: usize,
+    color: bool,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    draw_rail_group_header(output, width, row, "▤", "CASES", None, color)?;
+    let mut column = 15_u16;
+    queue!(output, MoveTo(column, row))?;
+    let add_start = column;
+    draw_toolbar_button(output, "[+Case]", color, theme::PRIMARY)?;
+    column += UnicodeWidthStr::width("[+Case]") as u16;
+    layout.toolbar_regions.push(ToolbarRegion {
+        row,
+        start: add_start,
+        end: column,
+        action: EditorAction::AddCase,
+    });
+    column += 2;
+    queue!(output, MoveTo(column, row))?;
+    let all_start = column;
+    draw_toolbar_button(output, "[All]", color, theme::PRIMARY_SOFT)?;
+    column += UnicodeWidthStr::width("[All]") as u16;
+    layout.toolbar_regions.push(ToolbarRegion {
+        row,
+        start: all_start,
+        end: column,
+        action: EditorAction::TestAll,
+    });
+
+    let meta = if case_count == 1 {
+        "1 case".to_string()
+    } else {
+        format!("{case_count} cases")
+    };
+    let meta_column = width.saturating_sub(UnicodeWidthStr::width(meta.as_str()) as u16 + 2);
+    if meta_column > column + 1 {
+        draw_rail_muted(output, meta_column, row, &meta, color)?;
+    }
+    Ok(())
+}
+
+fn draw_rail_muted(
+    output: &mut impl Write,
+    column: u16,
+    row: u16,
+    text: &str,
+    color: bool,
+) -> AppResult<()> {
+    queue!(output, MoveTo(column, row))?;
+    if color {
+        queue!(output, SetForegroundColor(theme::MUTED))?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Dim),
+        Print(text),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    Ok(())
+}
+
+fn draw_rail_rule(output: &mut impl Write, width: u16, row: u16, color: bool) -> AppResult<()> {
+    queue!(output, MoveTo(2, row))?;
+    if color {
+        queue!(output, SetForegroundColor(theme::MUTED))?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Dim),
+        Print("─".repeat(width.saturating_sub(3) as usize)),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_rail_action(
+    output: &mut impl Write,
+    width: u16,
+    row: u16,
+    icon: &str,
+    label: &str,
+    action: EditorAction,
+    color: bool,
+    tint: Color,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    queue!(output, MoveTo(3, row))?;
+    if color {
+        queue!(
+            output,
+            SetForegroundColor(if tint == theme::SURFACE {
+                theme::MUTED
+            } else {
+                tint
+            })
+        )?;
+    }
+    queue!(
+        output,
+        SetAttribute(Attribute::Bold),
+        Print(icon),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    queue!(output, MoveTo(8, row))?;
+    draw_toolbar_button(output, label, color, tint)?;
+    layout.toolbar_regions.push(ToolbarRegion {
+        row,
+        start: 0,
+        end: width,
+        action,
+    });
+    Ok(())
+}
+
+fn draw_rail_case_grid(
+    output: &mut impl Write,
+    width: u16,
+    start: u16,
+    end: u16,
+    case_ids: &[u64],
+    color: bool,
+    layout: &mut Layout,
+) -> AppResult<()> {
+    let available_rows = end.saturating_sub(start) as usize;
+    if available_rows == 0 {
+        return Ok(());
+    }
+    if case_ids.is_empty() {
+        draw_rail_muted(output, 3, start, "No saved cases", color)?;
+        return Ok(());
+    }
+    let buttons = case_ids
+        .iter()
+        .map(|id| (format!("[{id}]"), EditorAction::TestCase(*id)))
+        .collect::<Vec<_>>();
+
+    let right_edge = width.saturating_sub(2);
+    let required_rows = rail_grid_row_count(&buttons, right_edge);
+    let has_overflow = required_rows > available_rows;
+    let button_rows = if has_overflow {
+        available_rows.saturating_sub(1)
+    } else {
+        available_rows
+    };
+    let mut row = start;
+    let mut column = 3_u16;
+    for (label, action) in &buttons {
+        let label_width = UnicodeWidthStr::width(label.as_str()) as u16;
+        if column > 3 && column.saturating_add(label_width) > right_edge {
+            row = row.saturating_add(1);
+            column = 3;
+        }
+        if row >= start.saturating_add(button_rows as u16) {
+            break;
+        }
+        queue!(output, MoveTo(column, row))?;
+        let button_start = column;
+        draw_toolbar_button(output, label, color, theme::PRIMARY_SOFT)?;
+        column += label_width;
+        layout.toolbar_regions.push(ToolbarRegion {
+            row,
+            start: button_start,
+            end: column,
+            action: *action,
+        });
+        column += 1;
+    }
+    if has_overflow {
+        draw_rail_action(
+            output,
+            width,
+            end - 1,
+            "…",
+            "[Cases]",
+            EditorAction::ChooseCase,
+            color,
+            theme::PRIMARY,
+            layout,
+        )?;
+    }
+    Ok(())
+}
+
+fn rail_grid_row_count(buttons: &[(String, EditorAction)], right_edge: u16) -> usize {
+    if buttons.is_empty() {
+        return 0;
+    }
+    let mut rows = 1_usize;
+    let mut column = 3_u16;
+    for (label, _) in buttons {
+        let label_width = UnicodeWidthStr::width(label.as_str()) as u16;
+        if column > 3 && column.saturating_add(label_width) > right_edge {
+            rows += 1;
+            column = 3;
+        }
+        column = column.saturating_add(label_width + 1);
+    }
+    rows
 }
 
 fn draw_toolbar(
@@ -1742,6 +2223,11 @@ fn draw_test_actions(
         ToolbarDensity::Full => "[All]",
     };
     let all_width = UnicodeWidthStr::width(all_label) as u16;
+    let picker_label = match density {
+        ToolbarDensity::Tiny => "…",
+        ToolbarDensity::Compact | ToolbarDensity::Full => "[…]",
+    };
+    let picker_width = UnicodeWidthStr::width(picker_label) as u16;
     let mut omitted = false;
     for (index, id) in case_ids.iter().enumerate() {
         let label = match density {
@@ -1750,7 +2236,11 @@ fn draw_test_actions(
             ToolbarDensity::Full => format!("[{id}]"),
         };
         let needed = UnicodeWidthStr::width(label.as_str()) as u16 + 1;
-        let remaining_indicator = if index + 1 < case_ids.len() { 2 } else { 0 };
+        let remaining_indicator = if index + 1 < case_ids.len() {
+            picker_width + 1
+        } else {
+            0
+        };
         if column
             .saturating_add(needed)
             .saturating_add(remaining_indicator)
@@ -1771,8 +2261,23 @@ fn draw_test_actions(
         )?;
         draw_toolbar_text(output, " ", color, column)?;
     }
-    if omitted && column.saturating_add(2).saturating_add(all_width) <= width {
-        draw_toolbar_text(output, "… ", color, column)?;
+    if omitted
+        && column
+            .saturating_add(picker_width)
+            .saturating_add(1)
+            .saturating_add(all_width)
+            <= width
+    {
+        draw_toolbar_action(
+            output,
+            picker_label,
+            EditorAction::ChooseCase,
+            color,
+            theme::PRIMARY,
+            column,
+            layout,
+        )?;
+        draw_toolbar_text(output, " ", color, column)?;
     }
     if column.saturating_add(all_width) <= width {
         draw_toolbar_action(
@@ -1858,6 +2363,7 @@ fn draw_toolbar_action(
     draw_toolbar_button(output, label, color, background)?;
     *column = column.saturating_add(UnicodeWidthStr::width(label) as u16);
     layout.toolbar_regions.push(ToolbarRegion {
+        row: layout.toolbar_row,
         start,
         end: *column,
         action,
@@ -2047,6 +2553,14 @@ mod tests {
         assert_eq!(statuses.get(&1), Some(&CaseBadgeStatus::Passed));
         assert_eq!(statuses.get(&2), Some(&CaseBadgeStatus::Failed));
         assert_eq!(statuses.get(&3), None);
+    }
+
+    #[test]
+    fn split_case_grid_wraps_instead_of_dropping_buttons() {
+        let buttons = (1..=8)
+            .map(|id| (format!("[{id}]"), EditorAction::TestCase(id)))
+            .collect::<Vec<_>>();
+        assert_eq!(rail_grid_row_count(&buttons, 41), 1);
     }
 
     #[test]
