@@ -1,6 +1,6 @@
 [package]
 name = "run-cli"
-version = "0.17.0"
+version = "0.17.1"
 edition = "2021"
 description = "Interactive competitive-programming runner"
 license = "MIT"

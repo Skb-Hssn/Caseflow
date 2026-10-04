@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-04
+
+### Fixed
+
+- Closed each Competitive Companion contest response before waiting for the
+  next problem, preventing contest imports from timing out when clients wait
+  for the connection to close.
+
 ## [0.17.0] - 2026-09-26
 
 ### Added

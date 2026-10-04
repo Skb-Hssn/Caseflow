@@ -151,6 +151,7 @@ fn receive_contest(
     let batch_size = batch.size;
     let mut problems = Vec::with_capacity(batch_size);
     respond(&mut stream, "200 OK", "Queued for run-cli contest import")?;
+    drop(stream);
     problems.push(first);
     ui.info(format!("Received contest problem 1/{batch_size}"));
 
