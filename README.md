@@ -292,6 +292,7 @@ signals.
 | `/edit PATH`                        | Edit any file in an external editor, creating the file when missing.                                                                          |
 | `/case delete ID`                   | Confirm and delete an input and its paired expected output.                                                                                   |
 | `/case clear`                       | Confirm and delete every case for the active source.                                                                                          |
+| `/init`                             | Initialize the contest directory: confirm and clear numbered saved inputs and outputs for all problems beside the active source.              |
 | `/compare ID EXPECTED`              | Run one case and compare it with an arbitrary expected file.                                                                                  |
 | `/stress BRUTE GENERATOR [OPTIONS]` | Differentially test against a trusted solution.                                                                                               |
 | `/contest [OPTIONS]`                | Download a complete contest using the active source as the first problem. In a source-less session, it also accepts an optional`DIRECTORY`. |
@@ -586,6 +587,7 @@ Interactive deletion asks for confirmation:
 ```text
 /case delete 1
 /case clear
+/init
 ```
 
 One-shot deletion requires `--force`:
@@ -596,6 +598,14 @@ run-cli case clear A.cpp --force
 ```
 
 Deleting an input also deletes its paired `.out<ID>` file when present.
+
+Use **More → Initialize contest directory**, or `/init`, to start fresh across
+all problems in the active source's directory. The confirmation shows the
+directory and the number of files to delete. This removes regular numbered
+`.inN` and `.outN` files, including expected outputs without matching inputs.
+Source files, unrelated files, symlinks, and subdirectories are preserved.
+Deletion cannot be undone; cancel the dialog to keep the existing cases.
+Unlike `/init`, `/case clear` only clears cases for the active source.
 
 ## One-shot commands
 

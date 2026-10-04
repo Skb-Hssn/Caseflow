@@ -302,6 +302,67 @@ pub fn clear(source: &SourceSpec, config: &Config) -> AppResult<Vec<PathBuf>> {
     Ok(deleted)
 }
 
+fn contest_case_stem(path: &Path) -> Option<&str> {
+    let (stem, suffix) = path.file_name()?.to_str()?.rsplit_once('.')?;
+    let id = suffix
+        .strip_prefix("in")
+        .or_else(|| suffix.strip_prefix("out"))?;
+    if stem.is_empty() || id.starts_with('0') || id.is_empty() {
+        return None;
+    }
+    if !id.bytes().all(|byte| byte.is_ascii_digit()) || id.parse::<u64>().is_err() {
+        return None;
+    }
+    Some(stem)
+}
+
+/// Only regular numbered case files in this directory; never recurse or follow symlinks.
+pub fn contest_case_files(directory: &Path) -> AppResult<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let path = entry.path();
+        if contest_case_stem(&path).is_some() && entry.file_type()?.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+pub fn initialize_contest(
+    source: &SourceSpec,
+    directory: &Path,
+    confirmed_files: &[PathBuf],
+    config: &Config,
+) -> AppResult<usize> {
+    let stems = confirmed_files
+        .iter()
+        .filter_map(|path| contest_case_stem(path))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut locks = Vec::new();
+    for stem in stems {
+        let mut target = source.clone();
+        target.stem = directory.join(stem);
+        locks.push(lock_cases(&target, config)?);
+    }
+    // Reject additions, removals, or files changed into symlinks during confirmation.
+    if contest_case_files(directory)? != confirmed_files {
+        return Err(AppError::new(
+            "saved case files changed during confirmation; initialize again",
+        ));
+    }
+    for (deleted, path) in confirmed_files.iter().enumerate() {
+        fs::remove_file(path).map_err(|error| {
+            AppError::new(format!(
+                "cannot delete '{}' after removing {deleted} file(s): {error}",
+                path.display()
+            ))
+        })?;
+    }
+    Ok(confirmed_files.len())
+}
+
 pub fn paste(source: &SourceSpec, id: Option<u64>, config: &Config) -> AppResult<SavedCase> {
     let output = if command_exists("wl-paste") {
         Command::new("wl-paste").output()
@@ -708,6 +769,84 @@ mod tests {
         assert_eq!(parent_or_current(&source.stem), Path::new("."));
         assert_eq!(case_path(&source, 1), PathBuf::from("a.in1"));
         assert_eq!(expected_path(&source, 1), PathBuf::from("a.out1"));
+    }
+
+    #[test]
+    fn initialize_contest_clears_all_problems_and_preserves_other_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = resolve_source(root.join("a.cpp")).unwrap();
+        let config = Config {
+            cache_dir: root.join("cache"),
+            ..Config::default()
+        };
+        let removed = [
+            "a.in1",
+            "a.out1",
+            "b.in7",
+            "b.out7",
+            "orphan.out9",
+            "a.b.in2",
+        ];
+        let preserved = [
+            "a.cpp",
+            "b.py",
+            "notes.txt",
+            "a.in",
+            "a.in0",
+            "a.in01",
+            "a.out2.bak",
+            "a.in18446744073709551616",
+        ];
+        for name in removed.iter().chain(&preserved) {
+            fs::write(root.join(name), "preserve contents").unwrap();
+        }
+        fs::create_dir(root.join("nested")).unwrap();
+        fs::write(root.join("nested/c.in1"), "nested").unwrap();
+        fs::create_dir(root.join("folder.in1")).unwrap();
+        std::os::unix::fs::symlink(root.join("notes.txt"), root.join("link.in1")).unwrap();
+        let files = contest_case_files(root).unwrap();
+        assert_eq!(files.len(), removed.len());
+        assert_eq!(
+            initialize_contest(&source, root, &files, &config).unwrap(),
+            removed.len()
+        );
+        for name in removed {
+            assert!(!root.join(name).exists(), "not removed: {name}");
+        }
+        for name in preserved {
+            assert_eq!(
+                fs::read_to_string(root.join(name)).unwrap(),
+                "preserve contents"
+            );
+        }
+        assert!(root.join("nested/c.in1").exists());
+        assert!(root.join("folder.in1").is_dir());
+        assert!(root.join("link.in1").is_symlink());
+        assert_eq!(next_id(&source).unwrap(), 1);
+        assert!(contest_case_files(root).unwrap().is_empty());
+    }
+
+    #[test]
+    fn initialize_contest_aborts_when_confirmed_file_list_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let source = resolve_source(root.join("a.cpp")).unwrap();
+        let config = Config {
+            cache_dir: root.join("cache"),
+            ..Config::default()
+        };
+        fs::write(root.join("a.in1"), "one").unwrap();
+        let files = contest_case_files(root).unwrap();
+        fs::write(root.join("b.in1"), "new").unwrap();
+        assert!(initialize_contest(&source, root, &files, &config).is_err());
+        assert!(root.join("a.in1").exists());
+        assert!(root.join("b.in1").exists());
+        let files = contest_case_files(root).unwrap();
+        fs::remove_file(root.join("b.in1")).unwrap();
+        std::os::unix::fs::symlink(root.join("a.in1"), root.join("b.in1")).unwrap();
+        assert!(initialize_contest(&source, root, &files, &config).is_err());
+        assert_eq!(fs::read_to_string(root.join("a.in1")).unwrap(), "one");
     }
 
     #[test]

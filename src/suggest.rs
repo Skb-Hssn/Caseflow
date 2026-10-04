@@ -10,6 +10,10 @@ const REPL_COMMANDS: &[(&str, &str)] = &[
     ("/compare", "compare a saved case"),
     ("/stress", "run differential stress tests"),
     ("/contest", "download a complete contest"),
+    (
+        "/init",
+        "initialize contest directory and clear saved cases",
+    ),
     ("/companion", "import samples from Competitive Companion"),
     ("/edit", "edit any file or create a new file"),
     ("/open", "switch the active source"),
@@ -45,6 +49,7 @@ const HELP_TOPICS: &[(&str, &str)] = &[
     ("compare", "compare a saved case"),
     ("stress", "run differential stress tests"),
     ("contest", "download a complete contest"),
+    ("init", "initialize contest directory and clear saved cases"),
     ("companion", "import samples from Competitive Companion"),
     ("edit", "edit any file or create a new file"),
     ("open", "switch the active source"),

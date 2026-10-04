@@ -476,6 +476,10 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
         ("Delete case", "delete a saved input after confirmation"),
         ("Check tools", "inspect toolchains and clipboard support"),
         ("Help", "show commands and keyboard controls"),
+        (
+            "Initialize contest directory",
+            "clear all saved cases in the active source directory",
+        ),
         ("Exit", "leave Caseflow and restore the terminal"),
     ];
     let Some(selected) = terminal::select_menu(
@@ -505,7 +509,8 @@ fn select_more_action(session: &Session) -> AppResult<Option<MoreAction>> {
         8 => return select_case_action(session, "Delete saved case", "/case delete"),
         9 => MoreAction::Command("/doctor".to_string()),
         10 => MoreAction::Command("/help".to_string()),
-        11 => MoreAction::Command("/exit".to_string()),
+        11 => MoreAction::Command("/init".to_string()),
+        12 => MoreAction::Command("/exit".to_string()),
         _ => return Ok(None),
     };
     Ok(Some(action))
@@ -604,6 +609,44 @@ impl Session {
         let command = tokens.first().map(String::as_str).unwrap_or_default();
         match command {
             "/exit" | "/quit" => Ok(SessionAction::Exit),
+            "/init" => {
+                if tokens.len() != 1 {
+                    return Err(AppError::usage("usage: /init"));
+                }
+                let directory = self
+                    .source
+                    .stem
+                    .parent()
+                    .filter(|path| !path.as_os_str().is_empty())
+                    .unwrap_or(Path::new("."))
+                    .canonicalize()?;
+                let files = cases::contest_case_files(&directory)?;
+                if files.is_empty() {
+                    self.ui.info("Contest directory already has no saved cases");
+                    return Ok(SessionAction::Continue);
+                }
+                self.ui
+                    .field("Contest directory", directory.display().to_string());
+                if !terminal::confirm(
+                    &format!(
+                        "Delete {} saved input/output files for ALL problems? Cannot be undone.",
+                        files.len()
+                    ),
+                    "Initialize",
+                    self.mouse,
+                    self.ui.color_enabled(),
+                )? {
+                    self.ui.info("Cancelled");
+                    return Ok(SessionAction::Continue);
+                }
+                let deleted =
+                    cases::initialize_contest(&self.source, &directory, &files, &self.config)?;
+                self.ui.success(format!(
+                    "Initialized contest directory: removed {deleted} saved input/output file(s) from '{}'. Deletion cannot be undone.",
+                    directory.display()
+                ));
+                Ok(SessionAction::Continue)
+            }
             "/help" => {
                 if tokens.len() > 2 {
                     return Err(AppError::usage("usage: /help [COMMAND]"));
@@ -941,6 +984,7 @@ fn print_help(topic: Option<&str>) {
             "compare" | "diff" => "/compare ID EXPECTED",
             "stress" => "/stress BRUTE GENERATOR [--runs N] [--timeout SEC]",
             "contest" => "/contest [--port PORT] [--wait SEC]\nDownload a complete contest from Competitive Companion.",
+            "init" => "/init\nConfirm and clear numbered saved inputs and outputs for all problems in the active source directory. Source files and subdirectories are preserved.",
             "companion" => "/companion [contest] [--port PORT] [--wait SEC]\nWait for one problem, or collect a complete contest batch, from Competitive Companion.",
             "edit" => "/edit PATH\nOpen any file in the configured editor; create it if missing.",
             "open" | "source" => "/open [PATH]\nWith no path, open the fuzzy source picker.",
@@ -971,6 +1015,7 @@ RUN
 CASES
   /case list|show ID|copy ID|paste [ID] [--run]
   /case add|edit ID|delete ID|clear
+  /init                   initialize contest directory; clear cases for all problems
   /compare ID EXPECTED
   /stress BRUTE GENERATOR [--runs N] [--timeout SEC]
   /contest [--port PORT] [--wait SEC]

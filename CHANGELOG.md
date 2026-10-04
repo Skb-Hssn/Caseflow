@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-26
+
+### Added
+
+- Added Initialize contest directory to More actions and the `/init` command.
+  After confirmation, initialization deletes regular numbered `.inN` and
+  `.outN` files for all problems in the active source directory, including
+  orphan expected outputs. Sources, unrelated files, symlinks, and nested
+  directories are preserved. The action aborts if the file list changes while
+  awaiting confirmation.
+
 ## [0.16.0] - 2026-09-25
 
 ### Added

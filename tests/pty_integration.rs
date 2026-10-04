@@ -1099,6 +1099,48 @@ fn enter_confirms_case_deletion() {
 }
 
 #[test]
+fn contest_initialization_confirms_cancels_and_clears_all_problems() {
+    let directory = TempDir::new().unwrap();
+    let source = source(directory.path(), "print('ready')\n");
+    let files = ["main.in1", "main.out1", "other.in3", "orphan.out2"];
+    for name in files {
+        fs::write(directory.path().join(name), "test case\n").unwrap();
+    }
+    let session = PtySession::spawn(repl_command(&directory, &source, true));
+    session.wait_for("[More]");
+    // More → Initialize contest directory (just before Exit).
+    session.send(b"\x1b[<0;79;23M");
+    session.wait_for("More actions");
+    session.wait_for("Initialize contest directory");
+    session.send(b"\x1b[<0;60;16M");
+    session.wait_for("Delete 4 saved input/output files for ALL problems?");
+    session.send(b"\x1b");
+    session.wait_for("Cancelled");
+    for name in files {
+        assert!(directory.path().join(name).exists());
+    }
+    let offset = session.output_len();
+    session.send(b"/init\r");
+    session.wait_for_sequence_since(
+        offset,
+        &["Delete 4 saved input/output files", "[ Initialize ]"],
+    );
+    session.send(b"\r");
+    session.wait_for_sequence_since(
+        offset,
+        &["removed 4 saved input/output file(s)", "caseflow:main.py"],
+    );
+    for name in files {
+        assert!(!directory.path().join(name).exists());
+    }
+    assert!(source.exists());
+    session.send(b"/init\r");
+    session.wait_for("Contest directory already has no saved cases");
+    session.send(b"/quit\r");
+    assert!(session.wait().success());
+}
+
+#[test]
 fn external_case_editor_owns_the_tty_and_rolls_back_failures() {
     let directory = TempDir::new().unwrap();
     let source = source(directory.path(), "print(input().strip())\n");

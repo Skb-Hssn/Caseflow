@@ -653,7 +653,7 @@ pub fn select_menu(
                         // Preserve those broad row hit targets outside the new
                         // panel while the panel itself uses the current order.
                         if mouse_event.column < layout.start_column
-                            && items.len() == 12
+                            && items.len() >= 12
                             && items.first().is_some_and(|item| item.0 == "Open source")
                             && chosen >= 1
                         {
